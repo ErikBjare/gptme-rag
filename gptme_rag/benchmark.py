@@ -3,7 +3,8 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 import psutil
 from rich.console import Console
@@ -20,7 +21,7 @@ class BenchmarkResult:
     duration: float
     memory_usage: float
     throughput: float
-    additional_metrics: Dict[str, float]
+    additional_metrics: dict[str, float]
 
     def __str__(self) -> str:
         """Format the result as a string."""
@@ -29,28 +30,25 @@ class BenchmarkResult:
             f"  Duration: {self.duration:.3f}s\n"
             f"  Memory Usage: {self.memory_usage / 1024 / 1024:.2f}MB\n"
             f"  Throughput: {self.throughput:.2f} items/s\n"
-            + "".join(
-                f"  {k}: {v}\n"
-                for k, v in self.additional_metrics.items()
-            )
+            + "".join(f"  {k}: {v}\n" for k, v in self.additional_metrics.items())
         )
 
 
 class RagBenchmark:
     """Benchmark suite for gptme-rag operations."""
 
-    def __init__(self, index_dir: Optional[Path] = None):
+    def __init__(self, index_dir: Path | None = None):
         """Initialize the benchmark suite.
 
         Args:
             index_dir: Directory for the index. If None, uses a temporary directory.
         """
         self.index_dir = index_dir or Path("benchmark_index")
-        self.results: List[BenchmarkResult] = []
+        self.results: list[BenchmarkResult] = []
 
     def measure_operation(
         self,
-        operation_fn: Callable[[], Dict[str, Any]],
+        operation_fn: Callable[[], dict[str, Any]],
         name: str,
     ) -> BenchmarkResult:
         """Measure the performance of an operation.
@@ -64,29 +62,44 @@ class RagBenchmark:
         Returns:
             BenchmarkResult with performance metrics
         """
-        # Get initial memory usage
-        start_mem = psutil.Process().memory_info().rss
 
-        # Time the operation
+        # Calculate metrics
+        def get_process_memory():
+            """Get total memory usage for the current process and its children."""
+            process = psutil.Process()
+            try:
+                # Get memory info for main process
+                mem_info = process.memory_full_info()
+                mem = mem_info.uss  # Use USS (Unique Set Size) instead of RSS
+
+                # Include memory of all children
+                for child in process.children(recursive=True):
+                    try:
+                        child_mem = child.memory_full_info()
+                        mem += child_mem.uss
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+
+                return mem
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return 0
+
+        # Take multiple measurements before operation
+        start_measurements = [get_process_memory() for _ in range(3)]
+        start_mem = min(start_measurements)  # Use minimum to avoid GC spikes
+
+        # Time the operation and get result
         start_time = time.time()
         result = operation_fn()
         duration = time.time() - start_time
 
-        # Calculate metrics
-        def get_process_memory():
-            process = psutil.Process()
-            mem = process.memory_info().rss
-            for child in process.children(recursive=True):
-                try:
-                    mem += child.memory_info().rss
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            return mem
+        # Take multiple measurements after operation
+        end_measurements = [get_process_memory() for _ in range(3)]
+        end_mem = max(end_measurements)  # Use maximum to capture peak usage
 
-        # Get memory usage for main process and all children
-        end_mem = get_process_memory()
-        memory_used = max(0, end_mem - start_mem)
-        
+        # Calculate metrics - ensure we have a positive value
+        memory_used = max(end_mem - start_mem, 1024)  # Minimum 1KB to avoid zero
+
         items = result.get("items_processed", 1)
         throughput = items / duration if duration > 0 else 0
 
@@ -133,7 +146,7 @@ class RagBenchmark:
 
     def run_search_benchmark(
         self,
-        queries: List[str],
+        queries: list[str],
         n_results: int = 5,
     ) -> BenchmarkResult:
         """Benchmark search operations.
@@ -188,7 +201,7 @@ class RagBenchmark:
             test_file = docs_path / "benchmark_test.txt"
             updates = 0
 
-            with FileWatcher(indexer, [str(docs_path)]) as watcher:
+            with FileWatcher(indexer, [str(docs_path)]) as _watcher:
                 end_time = time.time() + duration
                 while time.time() < end_time:
                     # Write update

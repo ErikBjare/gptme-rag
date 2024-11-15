@@ -33,7 +33,9 @@ def main():
         for doc, score in zip(documents, distances):
             console.print(f"[green]{doc.metadata['filename']}[/green]")
             console.print(f"Score: {1 - score:.2f}")
-            console.print(doc.content[:200] + "..." if len(doc.content) > 200 else doc.content)
+            console.print(
+                doc.content[:200] + "..." if len(doc.content) > 200 else doc.content
+            )
             console.print()
 
         return 0

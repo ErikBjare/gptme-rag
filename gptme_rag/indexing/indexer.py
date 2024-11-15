@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 
 import chromadb
@@ -65,16 +66,23 @@ class Indexer:
             if "Resetting is not allowed" not in e.args[0]:
                 logger.exception("Error resetting ChromaDB client")
 
-    def add_document(self, document: Document) -> None:
+    def add_document(self, document: Document, timestamp: int | None = None) -> None:
         """Add a single document to the index."""
         if not document.doc_id:
-            document.doc_id = str(hash(document.content))
+            base = str(hash(document.content))
+            ts = timestamp or int(time.time() * 1000)
+            document.doc_id = f"{base}-{ts}"
 
-        self.collection.add(
-            documents=[document.content],
-            metadatas=[document.metadata],
-            ids=[document.doc_id],
-        )
+        try:
+            self.collection.add(
+                documents=[document.content],
+                metadatas=[document.metadata],
+                ids=[document.doc_id],
+            )
+            logger.debug(f"Added document with ID: {document.doc_id}")
+        except Exception as e:
+            logger.error(f"Error adding document: {e}", exc_info=True)
+            raise
 
     def add_documents(self, documents: list[Document], batch_size: int = 100) -> None:
         """Add multiple documents to the index.
@@ -265,9 +273,16 @@ class Indexer:
         content = "\n".join(chunk.content for chunk in chunks)
 
         # Use metadata from first chunk, removing chunk-specific fields
+        # Create clean metadata without chunk-specific fields
         metadata = chunks[0].metadata.copy()
-        metadata.pop("chunk_index", None)
-        metadata.pop("token_count", None)
+        for key in [
+            "chunk_index",
+            "token_count",
+            "is_chunk",
+            "chunk_start",
+            "chunk_end",
+        ]:
+            metadata.pop(key, None)
 
         return Document(
             content=content,
@@ -276,6 +291,69 @@ class Indexer:
             source_path=chunks[0].source_path,
             last_modified=chunks[0].last_modified,
         )
+
+    def verify_document(
+        self,
+        path: Path,
+        content: str | None = None,
+        retries: int = 3,
+        delay: float = 0.2,
+    ) -> bool:
+        """Verify that a document is properly indexed.
+
+        Args:
+            path: Path to the document
+            content: Optional content to verify (if different from file)
+            retries: Number of verification attempts
+            delay: Delay between retries
+
+        Returns:
+            bool: True if document is verified in index
+        """
+        search_content = content if content is not None else path.read_text()[:100]
+        canonical_path = str(path.resolve())
+
+        for attempt in range(retries):
+            try:
+                results, _ = self.search(
+                    search_content, n_results=1, where={"source": canonical_path}
+                )
+                if results and search_content in results[0].content:
+                    logger.debug(f"Document verified on attempt {attempt + 1}: {path}")
+                    return True
+                time.sleep(delay)
+            except Exception as e:
+                logger.warning(f"Verification attempt {attempt + 1} failed: {e}")
+                time.sleep(delay)
+
+        logger.warning(f"Failed to verify document after {retries} attempts: {path}")
+        return False
+
+    def delete_document(self, doc_id: str) -> bool:
+        """Delete a document and all its chunks from the index.
+
+        Args:
+            doc_id: Base document ID (without chunk suffix)
+
+        Returns:
+            bool: True if deletion was successful
+        """
+        try:
+            # First try to delete by exact ID
+            self.collection.delete(ids=[doc_id])
+            logger.debug(f"Deleted document: {doc_id}")
+
+            # Then delete any related chunks
+            try:
+                self.collection.delete(where={"source": doc_id})
+                logger.debug(f"Deleted related chunks for: {doc_id}")
+            except Exception as chunk_e:
+                logger.warning(f"Error deleting chunks for {doc_id}: {chunk_e}")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting document {doc_id}: {e}")
+            return False
 
     def index_file(self, path: Path) -> None:
         """Index a single file.

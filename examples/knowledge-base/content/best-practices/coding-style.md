@@ -38,7 +38,7 @@ def long_function_name(arg1: str, arg2: int, arg3: List[str]) -> Dict[str, Any]:
    ```python
    # Good
    user_count = get_active_users()
-   
+
    # Bad
    n = get_users()
    ```
@@ -49,7 +49,7 @@ def long_function_name(arg1: str, arg2: int, arg3: List[str]) -> Dict[str, Any]:
    ```python
    # Good
    class UserAuthentication:
-   
+
    # Bad
    class authenticate_user:
    ```
@@ -59,7 +59,7 @@ def long_function_name(arg1: str, arg2: int, arg3: List[str]) -> Dict[str, Any]:
    ```python
    # Good
    MAX_CONNECTIONS = 100
-   
+
    # Bad
    maximumConnections = 100
    ```
@@ -76,11 +76,11 @@ def process_items(
     config: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     """Process a list of items with optional configuration.
-    
+
     Args:
         items: Items to process
         config: Optional configuration
-        
+
     Returns:
         Processed items
     """
@@ -97,20 +97,20 @@ def complex_function(
     param2: int,
 ) -> bool:
     """Short description of function.
-    
+
     Longer description if needed, explaining complex
     behavior or important details.
-    
+
     Args:
         param1: Description of param1
         param2: Description of param2
-        
+
     Returns:
         Description of return value
-        
+
     Raises:
         ValueError: Description of when this is raised
-        
+
     Example:
         >>> complex_function("test", 42)
         True
@@ -234,11 +234,11 @@ repos:
    # Good
    def get_user_data(user_id: int) -> Dict[str, Any]:
        return fetch_user(user_id)
-   
+
    # Bad
    def get_user_name(user_id: int) -> str:
        return fetch_user(user_id)["name"]
-   
+
    def get_user_email(user_id: int) -> str:
        return fetch_user(user_id)["email"]
    ```

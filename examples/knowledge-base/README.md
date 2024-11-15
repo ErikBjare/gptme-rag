@@ -32,7 +32,7 @@ This example includes a complete set of development documentation:
   - Installation steps
   - Editor configuration
   - Verification steps
-  
+
 - **workflow.md**: Development workflow
   - Git workflow
   - Code review process
@@ -45,7 +45,7 @@ This example includes a complete set of development documentation:
   - Test types and patterns
   - Running tests
   - CI integration
-  
+
 - **coding-style.md**: Code standards
   - Python style guide
   - Git conventions

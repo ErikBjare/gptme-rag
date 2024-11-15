@@ -3,22 +3,22 @@ info:
   title: Example API
   description: |
     Example API demonstrating common patterns and documentation.
-    
+
     ## Authentication
-    
+
     This API uses Bearer token authentication. Include the token in the Authorization header:
     ```http
     Authorization: Bearer your-token-here
     ```
-    
+
     Get your API token from the developer dashboard.
-    
+
     ## Rate Limiting
-    
+
     Requests are limited to:
     - 1000 requests per hour for authenticated users
     - 100 requests per hour for unauthenticated users
-    
+
     Rate limit headers are included in all responses.
   version: 1.0.0
   contact:
@@ -40,7 +40,7 @@ paths:
       summary: List users
       description: |
         Retrieve a list of users. Results are paginated.
-        
+
         ### Pagination
         Use `page` and `per_page` parameters to control pagination.
         Response includes `Link` headers for navigation.
@@ -82,7 +82,7 @@ paths:
                 total: 42
         '429':
           $ref: '#/components/responses/TooManyRequests'
-    
+
     post:
       summary: Create user
       description: Create a new user account.

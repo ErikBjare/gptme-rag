@@ -15,7 +15,7 @@ This example demonstrates how to use gptme-rag to create a searchable index of A
 api-search/
 ├── docs/
 │   ├── openapi.yaml        # OpenAPI specification
-│   ├── guides/            
+│   ├── guides/
 │   │   ├── authentication.md
 │   │   ├── rate-limits.md
 │   │   └── versioning.md

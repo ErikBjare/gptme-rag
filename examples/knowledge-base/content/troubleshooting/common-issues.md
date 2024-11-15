@@ -8,7 +8,7 @@ This guide covers frequently encountered issues and their solutions.
 
 #### "Command not found: python"
 - **Cause**: Python not installed or not in PATH
-- **Solution**: 
+- **Solution**:
   1. Install Python from python.org
   2. Add Python to system PATH
   3. Verify with `python --version`

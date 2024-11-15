@@ -16,10 +16,10 @@ def main():
     try:
         # Create indexer
         indexer = Indexer(persist_directory=Path("watch_index"))
-        
+
         # Get current directory to watch
         watch_dir = Path.cwd()
-        
+
         console.print(f"Watching directory: {watch_dir}")
         console.print("Try:")
         console.print("- Adding .md files")
@@ -32,15 +32,17 @@ def main():
             indexer=indexer,
             paths=[str(watch_dir)],
             pattern="**/*.md",
-        ) as watcher:
+        ) as _watcher:
             try:
                 # Keep running until interrupted
                 import signal
+
                 try:
                     signal.pause()
                 except AttributeError:  # Windows
                     while True:
                         import time
+
                         time.sleep(1)
             except KeyboardInterrupt:
                 console.print("\nStopping watcher...")

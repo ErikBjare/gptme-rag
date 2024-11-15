@@ -49,7 +49,7 @@ def test_user_registration_flow():
     # Test user registration end-to-end
     user_service = UserService(db_session)
     email_service = EmailService()
-    
+
     user = user_service.register("test@example.com", "password123")
     assert user.is_active == False
     assert email_service.was_verification_sent(user.email)
@@ -69,12 +69,12 @@ Test complete user workflows.
 def test_user_login_workflow():
     driver = webdriver.Chrome()
     driver.get(BASE_URL)
-    
+
     # Login flow
     driver.find_element_by_id("email").send_keys("user@example.com")
     driver.find_element_by_id("password").send_keys("password123")
     driver.find_element_by_id("login-button").click()
-    
+
     assert "Dashboard" in driver.title
 ```
 

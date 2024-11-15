@@ -62,6 +62,12 @@ class Document:
                 }
                 # Ensure unique chunk IDs by using both index and position
                 chunk_id = f"{base_id}#chunk{chunk['metadata']['chunk_index']}-{chunk['metadata']['chunk_start']}"
+                # Create chunk metadata with chunk-specific fields
+                chunk_metadata = {
+                    **base_metadata,
+                    **chunk["metadata"],
+                    "is_chunk": True,  # Explicitly mark as chunk
+                }
                 yield cls(
                     content=chunk["text"],
                     metadata=chunk_metadata,
@@ -78,7 +84,7 @@ class Document:
         Returns:
             True if this is a chunk, False otherwise
         """
-        return self.chunk_index is not None
+        return self.chunk_index is not None or self.metadata.get("is_chunk", False)
 
     def get_chunk_info(self) -> tuple[int, int]:
         """Get information about the chunk.

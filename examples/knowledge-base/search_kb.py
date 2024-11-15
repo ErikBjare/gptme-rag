@@ -3,13 +3,11 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
 
 from gptme_rag.indexing.indexer import Indexer
 
@@ -18,34 +16,34 @@ console = Console()
 
 def format_result(doc, score: float, show_content: bool = True) -> Panel:
     """Format a search result as a rich Panel.
-    
+
     Args:
         doc: Document result
         score: Relevance score
         show_content: Whether to show full content
-    
+
     Returns:
         Formatted panel
     """
     # Get source information
     source = doc.metadata.get("filename", "unknown")
     category = Path(source).parent.name
-    
+
     # Create title with score and source
     title = f"[cyan]{source}[/cyan] [yellow](relevance: {score:.2f})[/yellow]"
     if category:
         title = f"[green]{category}[/green] > {title}"
-    
+
     # Format content
     if show_content:
         content = doc.content
         # If it's markdown, render it
-        if source.endswith('.md'):
+        if source.endswith(".md"):
             content = Markdown(content)
     else:
         # Show just a preview
         content = doc.content[:200] + "..." if len(doc.content) > 200 else doc.content
-    
+
     return Panel(content, title=title, border_style="blue")
 
 
@@ -67,9 +65,9 @@ def format_result(doc, score: float, show_content: bool = True) -> Panel:
     is_flag=True,
     help="Show full content of results",
 )
-def main(query: Optional[str], index_dir: Path, interactive: bool, show_content: bool):
+def main(query: str | None, index_dir: Path, interactive: bool, show_content: bool):
     """Search the knowledge base.
-    
+
     If no query is provided or --interactive is set, runs in interactive mode.
     """
     try:
@@ -82,7 +80,7 @@ def main(query: Optional[str], index_dir: Path, interactive: bool, show_content:
 
         # Create indexer
         indexer = Indexer(persist_directory=index_dir)
-        
+
         def do_search(search_query: str):
             """Perform search and display results."""
             # Search with chunk grouping
@@ -91,11 +89,11 @@ def main(query: Optional[str], index_dir: Path, interactive: bool, show_content:
                 n_results=5,
                 group_chunks=True,
             )
-            
+
             if not documents:
                 console.print("No results found.")
                 return
-            
+
             # Display results
             console.print(f"\nResults for: [cyan]{search_query}[/cyan]\n")
             for doc, distance in zip(documents, distances):
@@ -112,7 +110,7 @@ def main(query: Optional[str], index_dir: Path, interactive: bool, show_content:
             console.print("  - How do I set up my development environment?")
             console.print("  - What's the workflow for creating a pull request?")
             console.print("  - Show me the testing requirements")
-            
+
             while True:
                 try:
                     query = input("\nEnter search query: ").strip()
@@ -125,7 +123,7 @@ def main(query: Optional[str], index_dir: Path, interactive: bool, show_content:
         else:
             # Single query mode
             do_search(query)
-        
+
         return 0
 
     except Exception as e:

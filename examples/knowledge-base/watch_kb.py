@@ -40,14 +40,16 @@ def main():
             paths=[str(kb_dir)],
             pattern="**/*.md",
             ignore_patterns=[".git", "__pycache__", "*.pyc"],
-        ) as watcher:
+        ) as _watcher:
             try:
                 # Keep running until interrupted
                 import signal
+
                 signal.pause()
             except (KeyboardInterrupt, AttributeError):
                 # Handle both Ctrl+C and Windows (no signal.pause)
                 import time
+
                 while True:
                     try:
                         time.sleep(1)
