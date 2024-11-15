@@ -88,13 +88,22 @@ class Indexer:
         """Index all files in a directory matching the glob pattern."""
         directory = directory.resolve()  # Convert to absolute path
         files = list(directory.glob(glob_pattern))
-        print(f"Found {len(files)} files in {directory}:")
-        for f in files:
+        
+        # Filter out database files and get valid files
+        valid_files = [
+            f for f in files 
+            if f.is_file() 
+            and not f.name.endswith('.sqlite3')
+            and not f.name.endswith('.db')
+        ]
+        
+        print(f"Found {len(valid_files)} indexable files in {directory}:")
+        for f in valid_files:
             print(f"  {f.relative_to(directory)}")
         
-        documents = [Document.from_file(f) for f in files if f.is_file()]
+        documents = [Document.from_file(f) for f in valid_files]
         if not documents:
-            raise ValueError(f"No documents found in {directory} with pattern {glob_pattern}")
+            raise ValueError(f"No valid documents found in {directory} with pattern {glob_pattern}")
         self.add_documents(documents)
     
     def search(
@@ -102,7 +111,7 @@ class Indexer:
         query: str,
         n_results: int = 5,
         where: Optional[dict] = None
-    ) -> tuple[List[Document], dict]:
+    ) -> List[Document]:
         """Search for documents similar to the query."""
         results = self.collection.query(
             query_texts=[query],
@@ -119,4 +128,4 @@ class Indexer:
             )
             documents.append(doc)
             
-        return documents, results
+        return documents

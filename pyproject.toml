@@ -3,6 +3,24 @@ name = "gptme-rag"
 version = "0.1.0"
 description = "RAG implementation for gptme context management"
 authors = ["Bob <bob@gptme.org>"]
+readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/ErikBjare/gptme-rag"
+repository = "https://github.com/ErikBjare/gptme-rag"
+documentation = "https://github.com/ErikBjare/gptme-rag#readme"
+keywords = ["rag", "gptme", "context-management", "embeddings", "chromadb"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: General",
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -18,6 +36,9 @@ pytest = "^7.4.3"
 black = "^23.11.0"
 ruff = "^0.1.6"
 mypy = "^1.7.1"
+
+[tool.poetry.scripts]
+gptme-rag = "gptme_rag.cli:main"
 
 [build-system]
 requires = ["poetry-core"]

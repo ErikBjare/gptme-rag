@@ -32,14 +32,19 @@ RAG (Retrieval-Augmented Generation) implementation for gptme context management
 ## Installation
 
 ```bash
-# From PyPI (coming soon)
+# Using pip
 pip install gptme-rag
 
-# From source
+# Using pipx (recommended for CLI tools)
+pipx install gptme-rag
+
+# From source (for development)
 git clone https://github.com/ErikBjare/gptme-rag.git
 cd gptme-rag
 poetry install
 ```
+
+After installation, the `gptme-rag` command will be available in your terminal.
 
 ## Usage
 
