@@ -23,7 +23,7 @@ repos:
     name: pytest
     stages: [pre-commit]
     types: [python]
-    entry: pytest
+    entry: make test
     language: system
     pass_filenames: false
     always_run: true
