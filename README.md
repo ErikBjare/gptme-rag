@@ -252,6 +252,18 @@ gptme_rag/
 5. Run tests and linting
 6. Submit a pull request
 
+### Releases
+
+Releases are automated through GitHub Actions. The process is:
+1. Update version in pyproject.toml
+2. Commit the change: `git commit -am "chore: bump version to x.y.z"`
+3. Create and push a tag: `git tag vx.y.z && git push origin master vx.y.z`
+4. Create a GitHub release (can be done with `gh release create vx.y.z`)
+5. The publish workflow will automatically:
+   - Run tests
+   - Build the package
+   - Publish to PyPI
+
 ## Integration with gptme
 
 This package is designed to integrate with [gptme](https://github.com/ErikBjare/gptme) as a plugin, providing:
