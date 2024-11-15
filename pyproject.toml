@@ -31,6 +31,8 @@ pydantic = "^2.5.2"
 click = "^8.1.7"
 rich = "^13.7.0"
 tiktoken = "^0.5.2"
+watchdog = "^3.0.0"
+psutil = "^6.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

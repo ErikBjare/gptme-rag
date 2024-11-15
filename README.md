@@ -24,10 +24,21 @@ RAG (Retrieval-Augmented Generation) implementation for gptme context management
   - Relevance scoring
   - Token-aware context assembly
   - Clean output formatting
+- 📄 Smart document processing
+  - Streaming large file handling
+  - Automatic document chunking
+  - Configurable chunk size/overlap
+  - Document reconstruction
+- 👀 File watching and auto-indexing
+  - Real-time index updates
+  - Pattern-based file filtering
+  - Efficient batch processing
+  - Automatic persistence
 - 🛠️ CLI interface for testing and development
   - Index management
   - Search functionality
   - Context assembly
+  - File watching
 
 ## Installation
 
@@ -72,24 +83,139 @@ poetry run python -m gptme_rag search "your query" \
   --show-context
 ```
 
-### Example Output
+### File Watching
+
+The watch command monitors directories for changes and automatically updates the index:
+
+```bash
+# Watch a directory with default settings
+poetry run python -m gptme_rag watch /path/to/documents
+
+# Watch with custom pattern and ignore rules
+poetry run python -m gptme_rag watch /path/to/documents \
+  --pattern "**/*.{md,py}" \
+  --ignore-patterns "*.tmp" "*.log" \
+  --persist-dir ./index
+```
+
+Features:
+- 🔄 Real-time index updates
+- 🎯 Pattern matching for file types
+- 🚫 Configurable ignore patterns
+- 🔋 Efficient batch processing
+- 💾 Automatic persistence
+
+The watcher will:
+- Perform initial indexing of existing files
+- Monitor for file changes (create/modify/delete/move)
+- Update the index automatically
+- Handle rapid changes efficiently with debouncing
+- Continue running until interrupted (Ctrl+C)
+
+### Performance Benchmarking
+
+The benchmark commands help measure and optimize performance:
+
+```bash
+# Benchmark document indexing
+poetry run python -m gptme_rag benchmark indexing /path/to/documents \
+  --pattern "**/*.md" \
+  --persist-dir ./benchmark_index
+
+# Benchmark search performance
+poetry run python -m gptme_rag benchmark search /path/to/documents \
+  --queries "python" "documentation" "example" \
+  --n-results 10
+
+# Benchmark file watching
+poetry run python -m gptme_rag benchmark watch-perf /path/to/documents \
+  --duration 10 \
+  --updates-per-second 5
+```
+
+Features:
+- 📊 Comprehensive metrics
+  - Operation duration
+  - Memory usage
+  - Throughput
+  - Custom metrics per operation
+- 🔬 Multiple benchmark types
+  - Document indexing
+  - Search operations
+  - File watching
+- 📈 Performance tracking
+  - Memory efficiency
+  - Processing speed
+  - System resource usage
+
+Example benchmark output:
+```plaintext
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ Operation      ┃ Duration(s) ┃ Memory(MB) ┃ Throughput ┃ Additional Metrics ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+│ indexing       │      0.523 │     15.42 │   19.12/s │ files: 10         │
+│ search         │      0.128 │      5.67 │   23.44/s │ queries: 3        │
+│ file_watching  │      5.012 │      8.91 │    4.99/s │ updates: 25       │
+└────────────────┴────────────┴───────────┴───────────┴──────────────────┘
+```
+
+### Document Chunking
+
+The indexer supports automatic document chunking for efficient processing of large files:
+
+```bash
+# Index with custom chunk settings
+poetry run python -m gptme_rag index /path/to/documents \
+  --chunk-size 1000 \
+  --chunk-overlap 200
+
+# Search with chunk grouping
+poetry run python -m gptme_rag search "your query" \
+  --group-chunks \
+  --n-results 5
+```
+
+Features:
+- 🔄 Streaming processing
+  - Handles large files efficiently
+  - Minimal memory usage
+  - Progress reporting
+- 📑 Smart chunking
+  - Configurable chunk size
+  - Overlapping chunks for context
+  - Token-aware splitting
+- 🔍 Enhanced search
+  - Chunk-aware relevance
+  - Result grouping by document
+  - Full document reconstruction
+
+Example Output:
 ```plaintext
 Most Relevant Documents:
 
-1. ARCHITECTURE.md (relevance: 0.82)
-  The task system is designed to help track and manage work effectively across sessions. Components include task registry, status tracking, and journal integration.
+1. documentation.md#chunk2 (relevance: 0.85)
+  Detailed section about configuration options, including chunk size and overlap settings.
+  [Part of: documentation.md]
 
-2. TASKS.md (relevance: 0.75)
-  Active tasks and their current status. Includes task categories, status indicators, and progress tracking.
+2. guide.md#chunk5 (relevance: 0.78)
+  Example usage showing how to process large documents efficiently.
+  [Part of: guide.md]
 
-3. docs/workflow.md (relevance: 0.65)
-  Documentation about workflow integration and best practices for task management.
+3. README.md#chunk1 (relevance: 0.72)
+  Overview of the chunking system and its benefits for large document processing.
+  [Part of: README.md]
 
 Full Context:
-Total tokens: 1250
-Documents included: 3
+Total tokens: 850
+Documents included: 3 (from 3 source documents)
 Truncated: False
 ```
+
+The chunking system automatically:
+- Splits large documents into manageable pieces
+- Maintains context across chunk boundaries
+- Groups related chunks in search results
+- Provides document reconstruction when needed
 
 ## Development
 

@@ -44,7 +44,9 @@ def test_document_from_file(temp_dir):
     test_file.write_text(test_content)
 
     # Create document from file
-    doc = Document.from_file(test_file)
+    docs = list(Document.from_file(test_file))
+    assert len(docs) > 0
+    doc = docs[0]  # Get the first document
 
     assert doc.content == test_content
     assert doc.source_path == test_file
