@@ -1,4 +1,5 @@
 """Tests for the file watcher functionality."""
+
 import logging
 import time
 from pathlib import Path
