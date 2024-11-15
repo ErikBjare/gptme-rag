@@ -1,18 +1,20 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
+
 
 @dataclass
 class Document:
     """Represents a document to be indexed."""
+
     content: str
-    metadata: Dict[str, Any]
-    source_path: Optional[Path] = None
-    doc_id: Optional[str] = None
-    embedding: Optional[List[float]] = None
-    last_modified: Optional[datetime] = None
-    
+    metadata: dict[str, Any]
+    source_path: Path | None = None
+    doc_id: str | None = None
+    embedding: list[float] | None = None
+    last_modified: datetime | None = None
+
     @classmethod
     def from_file(cls, path: Path) -> "Document":
         """Create a Document from a file."""

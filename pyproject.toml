@@ -32,13 +32,19 @@ click = "^8.1.7"
 rich = "^13.7.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.3"
-black = "^23.11.0"
-ruff = "^0.1.6"
-mypy = "^1.7.1"
+pytest = "*"
+ruff = "*"
+mypy = "*"
 
 [tool.poetry.scripts]
 gptme-rag = "gptme_rag.cli:main"
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = ["E402", "E501", "B905"]
 
 [build-system]
 requires = ["poetry-core"]
