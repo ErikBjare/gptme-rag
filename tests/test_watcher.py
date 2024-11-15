@@ -1,16 +1,14 @@
 """Tests for the file watcher functionality."""
-
 import logging
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-logger = logging.getLogger(__name__)
-
 import pytest
-
 from gptme_rag.indexing.indexer import Indexer
 from gptme_rag.indexing.watcher import FileWatcher
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -21,16 +19,16 @@ def temp_workspace():
 
 
 @pytest.fixture
-def indexer(temp_workspace):
+def indexer(temp_workspace) -> Indexer:
     """Create an indexer for testing."""
     return Indexer(persist_directory=temp_workspace / "index")
 
 
-def test_file_watcher_basic(temp_workspace, indexer):
+def test_file_watcher_basic(temp_workspace, indexer: Indexer):
     """Test basic file watching functionality."""
     test_file = temp_workspace / "test.txt"
 
-    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0) as _watcher:
+    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0):
         # Create a new file
         test_file.write_text("Initial content")
         time.sleep(1)  # Wait for the watcher to process
@@ -50,11 +48,9 @@ def test_file_watcher_basic(temp_workspace, indexer):
         assert results[0].metadata["filename"] == test_file.name
 
 
-def test_file_watcher_pattern_matching(temp_workspace, indexer):
+def test_file_watcher_pattern_matching(temp_workspace, indexer: Indexer):
     """Test that pattern matching works correctly."""
-    with FileWatcher(
-        indexer, [str(temp_workspace)], pattern="*.txt", update_delay=0
-    ) as _watcher:
+    with FileWatcher(indexer, [str(temp_workspace)], pattern="*.txt", update_delay=0):
         # Create files with different extensions
         txt_file = temp_workspace / "test.txt"
         py_file = temp_workspace / "test.py"
@@ -70,11 +66,11 @@ def test_file_watcher_pattern_matching(temp_workspace, indexer):
         assert results[0].metadata["filename"] == txt_file.name
 
 
-def test_file_watcher_ignore_patterns(temp_workspace, indexer):
+def test_file_watcher_ignore_patterns(temp_workspace, indexer: Indexer):
     """Test that ignore patterns work correctly."""
     with FileWatcher(
         indexer, [str(temp_workspace)], ignore_patterns=["*.ignore"], update_delay=0
-    ) as _watcher:
+    ):
         # Create an ignored file and a normal file
         ignored_file = temp_workspace / "test.ignore"
         normal_file = temp_workspace / "test.txt"
@@ -90,7 +86,7 @@ def test_file_watcher_ignore_patterns(temp_workspace, indexer):
         assert results[0].metadata["filename"] == normal_file.name
 
 
-def test_file_watcher_move(temp_workspace, indexer):
+def test_file_watcher_move(temp_workspace, indexer: Indexer):
     """Test handling of file moves."""
     src_file = temp_workspace / "source.txt"
     dst_file = temp_workspace / "destination.txt"
@@ -111,7 +107,7 @@ def test_file_watcher_move(temp_workspace, indexer):
         logger.warning(f"Content not found after {retries} attempts: {content}")
         return False
 
-    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0) as _watcher:
+    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0):
         # Create source file and wait for it to be indexed
         src_file.write_text("Test content")
         assert wait_for_index("Test content", src_file.name), "Source file not indexed"
@@ -130,7 +126,7 @@ def test_file_watcher_move(temp_workspace, indexer):
         ), "Wrong filename in metadata"
 
 
-def test_file_watcher_batch_updates(temp_workspace, indexer):
+def test_file_watcher_batch_updates(temp_workspace, indexer: Indexer):
     """Test handling of multiple rapid updates."""
     test_file = temp_workspace / "test.txt"
 
@@ -139,7 +135,7 @@ def test_file_watcher_batch_updates(temp_workspace, indexer):
         logger.info(f"Waiting for content to be indexed: {content}")
         for attempt in range(retries):
             results, _ = indexer.search("Content version")
-            if len(results) == 1 and content in results[0].content:
+            if results and len(results) == 1 and content in (results[0].content or ""):
                 logger.info(f"Found content after {attempt + 1} attempts")
                 return True
             logger.debug(f"Attempt {attempt + 1}: content not found, waiting {delay}s")
@@ -151,7 +147,7 @@ def test_file_watcher_batch_updates(temp_workspace, indexer):
             logger.warning(f"Current content in index: {[r.content for r in results]}")
         return False
 
-    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0.2) as _watcher:
+    with FileWatcher(indexer, [str(temp_workspace)], update_delay=0.2):
         # Wait for watcher to initialize
         time.sleep(1.0)
         logger.info("Watcher initialized")
