@@ -1,8 +1,17 @@
 from pathlib import Path
 import pytest
 import tempfile
+import chromadb
 from gptme_rag.indexing.document import Document
 from gptme_rag.indexing.indexer import Indexer
+
+@pytest.fixture(autouse=True)
+def cleanup_chroma():
+    """Clean up ChromaDB between tests."""
+    yield
+    # Reset the ChromaDB client system
+    if hasattr(chromadb.api.client.SharedSystemClient, "_identifer_to_system"):
+        chromadb.api.client.SharedSystemClient._identifer_to_system = {}
 
 @pytest.fixture
 def test_docs():

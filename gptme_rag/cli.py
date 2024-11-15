@@ -1,3 +1,4 @@
+from typing import Optional
 import click
 from pathlib import Path
 from rich.console import Console
@@ -21,9 +22,19 @@ def index(directory: Path, pattern: str, persist_dir: Optional[Path]):
     """Index documents in a directory."""
     try:
         indexer = Indexer(persist_directory=persist_dir)
-        with console.status(f"Indexing {directory}..."):
+        console.print(f"Indexing files in {directory} with pattern {pattern}")
+        
+        # List files that will be indexed
+        files = list(directory.glob(pattern))
+        console.print(f"Found {len(files)} files:")
+        for file in files:
+            console.print(f"  - {file}")
+            
+        # Index the files
+        with console.status(f"Indexing {len(files)} files..."):
             indexer.index_directory(directory, pattern)
-        console.print(f"✅ Successfully indexed {directory}", style="green")
+            
+        console.print(f"✅ Successfully indexed {len(files)} files", style="green")
     except Exception as e:
         console.print(f"❌ Error indexing directory: {e}", style="red")
 
@@ -32,41 +43,68 @@ def index(directory: Path, pattern: str, persist_dir: Optional[Path]):
 @click.option('--n-results', '-n', default=5, help="Number of results to return")
 @click.option('--persist-dir', type=click.Path(path_type=Path), help="Directory to persist the index")
 @click.option('--max-tokens', default=4000, help="Maximum tokens in context window")
-def search(query: str, n_results: int, persist_dir: Optional[Path], max_tokens: int):
+@click.option('--show-context', is_flag=True, help="Show the full context content")
+def search(query: str, n_results: int, persist_dir: Optional[Path], max_tokens: int, show_context: bool):
     """Search the index and assemble context."""
     try:
-        indexer = Indexer(persist_directory=persist_dir)
-        assembler = ContextAssembler(max_tokens=max_tokens)
+        # Hide ChromaDB output during initialization and search
+        import sys, os
+        with console.status("Initializing..."):
+            # Temporarily redirect stdout to suppress ChromaDB output
+            stdout = sys.stdout
+            sys.stdout = open(os.devnull, 'w')
+            try:
+                indexer = Indexer(persist_directory=persist_dir)
+                assembler = ContextAssembler(max_tokens=max_tokens)
+                documents, results = indexer.search(query, n_results=n_results)
+            finally:
+                sys.stdout.close()
+                sys.stdout = stdout
         
-        # Search for relevant documents
-        with console.status("Searching..."):
-            documents = indexer.search(query, n_results=n_results)
-        
-        # Create result table
-        table = Table(title="Search Results")
-        table.add_column("Source")
-        table.add_column("Content Preview")
-        table.add_column("Score", justify="right")
-        
-        for doc in documents:
+        # Show a summary of the most relevant documents
+        console.print("\n[bold]Most Relevant Documents:[/bold]")
+        for i, doc in enumerate(documents):
             source = doc.metadata.get("source", "unknown")
-            preview = doc.content[:100] + "..." if len(doc.content) > 100 else doc.content
-            score = doc.metadata.get("score", "N/A")
-            table.add_row(source, preview, str(score))
+            filename = doc.metadata.get("filename", "unknown")
+            distance = results["distances"][0][i]
+            relevance = 1 - distance  # Convert distance to similarity score
             
-        console.print(table)
+            # Show document header with relevance score
+            console.print(f"\n[cyan]{i+1}. {filename}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]")
+            
+            # Extract first meaningful section (after headers)
+            lines = doc.content.split("\n")
+            content = []
+            for line in lines:
+                if line.strip() and not line.startswith("#"):
+                    content.append(line.strip())
+                    if len(" ".join(content)) > 200:
+                        break
+            
+            # Show the first paragraph or meaningful content
+            content_preview = " ".join(content)[:200] + "..." if len(" ".join(content)) > 200 else " ".join(content)
+            console.print(f"  {content_preview}")
         
         # Assemble context window
         context = assembler.assemble_context(documents, user_query=query)
-        console.print("\n[bold]Assembled Context:[/bold]")
+            
+        # Show assembled context
+        console.print("\n[bold]Full Context:[/bold]")
         console.print(f"Total tokens: {context.total_tokens}")
+        console.print(f"Documents included: {len(context.documents)}")
         console.print(f"Truncated: {context.truncated}")
         
-        if click.confirm("Show full context?"):
+        if click.get_current_context().params.get('show_context', False):
+            console.print("\n[bold]Context Content:[/bold]")
             console.print(context.content)
             
     except Exception as e:
-        console.print(f"❌ Error searching index: {e}", style="red")
+        console.print(f"❌ Error searching index:", style="red")
+        console.print_exception()
+
+def main(args=None):
+    """Entry point for the CLI."""
+    return cli(args=args)
 
 if __name__ == '__main__':
-    cli()
+    main()

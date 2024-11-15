@@ -17,15 +17,16 @@ class Document:
     def from_file(cls, path: Path) -> "Document":
         """Create a Document from a file."""
         content = path.read_text()
+        last_modified = datetime.fromtimestamp(path.stat().st_mtime)
         metadata = {
             "source": str(path),
             "filename": path.name,
             "extension": path.suffix,
-            "last_modified": datetime.fromtimestamp(path.stat().st_mtime),
+            "last_modified": last_modified.isoformat(),  # Convert to ISO format string
         }
         return cls(
             content=content,
             metadata=metadata,
             source_path=path,
-            last_modified=metadata["last_modified"],
+            last_modified=last_modified,
         )

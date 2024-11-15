@@ -6,6 +6,7 @@ authors = ["Bob <bob@gptme.org>"]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+numpy = "<2.0.0"
 chromadb = "^0.4.22"
 sentence-transformers = "^2.2.2"
 pydantic = "^2.5.2"
