@@ -41,9 +41,9 @@ class RagBenchmark:
         """Initialize the benchmark suite.
 
         Args:
-            index_dir: Directory for the index. If None, uses a temporary directory.
+            index_dir: Directory for the index. If None, uses an in-memory database.
         """
-        self.index_dir = index_dir or Path("benchmark_index")
+        self.index_dir = index_dir
         self.results: list[BenchmarkResult] = []
 
     def measure_operation(

@@ -17,7 +17,7 @@ class Indexer:
 
     def __init__(
         self,
-        persist_directory: Path,
+        persist_directory: Path | None,
         collection_name: str = "gptme_docs",
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
@@ -27,14 +27,18 @@ class Indexer:
             persist_directory.mkdir(parents=True, exist_ok=True)
             logger.debug(f"Using persist directory: {persist_directory}")
 
-        settings = Settings()
+        settings = Settings(
+            allow_reset=True,  # Allow resetting for testing
+            is_persistent=persist_directory is not None,
+        )
+
         if persist_directory:
             settings.persist_directory = str(persist_directory)
-            settings.allow_reset = True  # Allow resetting for testing
-            settings.is_persistent = True
-
-        logger.debug(f"Creating ChromaDB client with settings: {settings}")
-        self.client = chromadb.PersistentClient(path=str(persist_directory))
+            logger.debug(f"Using persist directory: {persist_directory}")
+            self.client = chromadb.PersistentClient(path=str(persist_directory))
+        else:
+            logger.debug("Using in-memory database")
+            self.client = chromadb.Client(settings)
 
         def create_collection():
             return self.client.get_or_create_collection(

@@ -5,8 +5,8 @@ from pathlib import Path
 from gptme_rag.benchmark import RagBenchmark
 
 # Configure logging to show only ERROR level
-logging.getLogger('chromadb').setLevel(logging.ERROR)
-logging.getLogger('gptme_rag').setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("gptme_rag").setLevel(logging.ERROR)
 
 # Create and clean test directories
 test_dir = Path("benchmark_data")
@@ -54,10 +54,7 @@ try:
 
     # Run indexing benchmark
     print("\nRunning indexing benchmark...")
-    index_result = benchmark.run_indexing_benchmark(
-        docs_dir,
-        pattern="*.md"
-    )
+    index_result = benchmark.run_indexing_benchmark(docs_dir, pattern="*.md")
 
     # Run search benchmark with various queries
     print("\nRunning search benchmark...")
@@ -68,17 +65,18 @@ try:
             "technical details",
             "implementation guide",
         ],
-        n_results=5
+        n_results=5,
     )
 
     # Custom file watching benchmark
     print("\nRunning file watch benchmark...")
+
     def watch_operation():
         updates = 0
         start_time = time.time()
         duration = 5.0
         update_interval = 1.0  # 1 second between updates
-        
+
         while time.time() - start_time < duration:
             # Write meaningful content that changes each time
             content = f"""# Watch Test Update {updates}
@@ -94,19 +92,16 @@ Time: {time.time()}
             watch_test_file.write_text(content)
             updates += 1
             time.sleep(update_interval)
-        
+
         return {
             "items_processed": updates,
             "metrics": {
                 "total_updates": updates,
                 "updates_per_second": updates / duration,
-            }
+            },
         }
 
-    watch_result = benchmark.measure_operation(
-        watch_operation,
-        "file_watching"
-    )
+    watch_result = benchmark.measure_operation(watch_operation, "file_watching")
 
     # Print results
     print("\nBenchmark Results:")
