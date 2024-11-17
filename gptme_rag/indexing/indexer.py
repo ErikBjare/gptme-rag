@@ -30,6 +30,7 @@ class Indexer:
         settings = Settings(
             allow_reset=True,  # Allow resetting for testing
             is_persistent=persist_directory is not None,
+            anonymized_telemetry=False,
         )
 
         if persist_directory:
