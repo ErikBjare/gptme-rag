@@ -1,14 +1,17 @@
 """Benchmarking tools for gptme-rag."""
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import psutil
 from rich.console import Console
 from rich.table import Table
+
+from .indexing.indexer import Indexer
+from .indexing.watcher import FileWatcher
 
 console = Console()
 
@@ -128,10 +131,11 @@ class RagBenchmark:
         Returns:
             BenchmarkResult for the indexing operation
         """
-        from .indexing.indexer import Indexer
 
         def index_operation():
-            indexer = Indexer(persist_directory=self.index_dir)
+            indexer = Indexer(
+                persist_directory=self.index_dir,
+            )
             files = list(docs_path.glob(pattern))
             indexer.index_directory(docs_path, pattern)
             return {
@@ -158,10 +162,11 @@ class RagBenchmark:
         Returns:
             BenchmarkResult for the search operations
         """
-        from .indexing.indexer import Indexer
 
         def search_operation():
-            indexer = Indexer(persist_directory=self.index_dir)
+            indexer = Indexer(
+                persist_directory=self.index_dir,
+            )
             total_results = 0
             for query in queries:
                 results, _ = indexer.search(query, n_results=n_results)
@@ -193,11 +198,11 @@ class RagBenchmark:
         Returns:
             BenchmarkResult for the watching operations
         """
-        from .indexing.indexer import Indexer
-        from .indexing.watcher import FileWatcher
 
         def watch_operation():
-            indexer = Indexer(persist_directory=self.index_dir)
+            indexer = Indexer(
+                persist_directory=self.index_dir,
+            )
             test_file = docs_path / "benchmark_test.txt"
             updates = 0
 
