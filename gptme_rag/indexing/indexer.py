@@ -55,15 +55,18 @@ class Indexer:
 
         def create_collection():
             assert self.client
-            return self.client.get_or_create_collection(
+            collection = self.client.get_or_create_collection(
                 name=collection_name, metadata={"hnsw:space": "cosine"}
             )
+            logger.debug(f"Collection ID: {collection.id}, Name: {collection_name}")
+            return collection
 
         logger.debug(f"Getting or creating collection: {collection_name}")
         try:
             self.collection: Collection = create_collection()
             logger.debug(
-                f"Collection created/retrieved. Count: {self.collection.count()}"
+                f"Collection created/retrieved. ID: {self.collection.id}, "
+                f"Name: {collection_name}, Count: {self.collection.count()}"
             )
         except Exception as e:
             logger.error(f"Error creating collection, resetting: {e}")
@@ -113,33 +116,53 @@ class Indexer:
         processed = 0
 
         while processed < total_docs:
-            # Process a batch of documents
-            batch = documents[processed : processed + batch_size]
-            contents = []
-            metadatas = []
-            ids = []
+            try:
+                # Process a batch of documents
+                batch = documents[processed : processed + batch_size]
+                contents = []
+                metadatas = []
+                ids = []
 
-            for doc in batch:
-                # Generate consistent ID if not provided
-                if not doc.doc_id:
-                    base_id = str(
-                        hash(
-                            doc.source_path.absolute()
-                            if doc.source_path
-                            else doc.content
+                for doc in batch:
+                    # Generate consistent ID if not provided
+                    if not doc.doc_id:
+                        base_id = str(
+                            hash(
+                                doc.source_path.absolute()
+                                if doc.source_path
+                                else doc.content
+                            )
                         )
+                        doc.doc_id = (
+                            f"{base_id}#chunk{doc.chunk_index}"
+                            if doc.is_chunk
+                            else base_id
+                        )
+
+                    contents.append(doc.content)
+                    metadatas.append(doc.metadata)
+                    ids.append(doc.doc_id)
+
+                # Add batch to collection
+                try:
+                    self.collection.add(
+                        documents=contents, metadatas=metadatas, ids=ids
                     )
-                    doc.doc_id = (
-                        f"{base_id}#chunk{doc.chunk_index}" if doc.is_chunk else base_id
+                except Exception as e:
+                    logger.debug(f"Collection add failed, recreating collection: {e}")
+                    # Recreate collection and retry
+                    assert self.client
+                    self.collection = self.client.get_or_create_collection(
+                        name=self.collection.name, metadata={"hnsw:space": "cosine"}
+                    )
+                    self.collection.add(
+                        documents=contents, metadatas=metadatas, ids=ids
                     )
 
-                contents.append(doc.content)
-                metadatas.append(doc.metadata)
-                ids.append(doc.doc_id)
-
-            # Add batch to collection
-            self.collection.add(documents=contents, metadatas=metadatas, ids=ids)
-            processed += len(batch)
+                processed += len(batch)
+            except Exception as e:
+                logger.error(f"Failed to process batch: {e}")
+                raise
 
             # Report progress
             progress = (processed / total_docs) * 100
