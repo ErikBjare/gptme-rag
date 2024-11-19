@@ -178,18 +178,14 @@ class IndexEventHandler(FileSystemEventHandler):
                         # Read current content for verification
                         current_content = path.read_text()
 
-                        # Remove all old versions from the index
-                        old_docs = self.indexer.search(
-                            "", n_results=100, where={"source": canonical_path}
-                        )[0]
-                        for doc in old_docs:
-                            if doc.doc_id is not None:
-                                if self.indexer.delete_document(doc.doc_id):
-                                    logger.info(f"Deleted old version: {doc.doc_id}")
-                                else:
-                                    logger.warning(
-                                        f"Failed to delete old version: {doc.doc_id}"
-                                    )
+                        # Clear all documents with this source path
+                        try:
+                            self.indexer.collection.delete(
+                                where={"source": canonical_path}
+                            )
+                            logger.info(f"Cleared old versions for: {canonical_path}")
+                        except Exception as e:
+                            logger.warning(f"Error clearing old versions: {e}")
 
                         # Index the new version with retries
                         max_attempts = 3
@@ -263,6 +259,14 @@ class FileWatcher:
             if not path.exists():
                 logger.warning(f"Watch path does not exist: {path}")
                 continue
+            # Clear any existing documents for this path
+            try:
+                for file in path.glob(self.event_handler.pattern):
+                    canonical_path = str(file.resolve())
+                    self.indexer.collection.delete(where={"source": canonical_path})
+            except Exception as e:
+                logger.warning(f"Error clearing existing documents: {e}")
+
             # Index existing files
             self.indexer.index_directory(path, self.event_handler.pattern)
             # Set up watching

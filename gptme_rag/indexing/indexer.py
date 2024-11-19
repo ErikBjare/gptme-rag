@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 
 import chromadb
-from chromadb.api import Collection
+from chromadb import Collection
+from chromadb.api import ClientAPI
 from chromadb.config import Settings
 
 from .document import Document
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 class Indexer:
     """Handles document indexing and embedding storage."""
 
+    client: ClientAPI | None = None
+    collection: Collection
+    processor: DocumentProcessor
+    is_persistent: bool = False
+
     def __init__(
         self,
         persist_directory: Path | None,
@@ -22,18 +28,22 @@ class Indexer:
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ):
-        if persist_directory:
+        enable_persist = False
+        if persist_directory and enable_persist:
+            self.is_persistent = True
             persist_directory = Path(persist_directory).expanduser().resolve()
             persist_directory.mkdir(parents=True, exist_ok=True)
             logger.debug(f"Using persist directory: {persist_directory}")
 
         settings = Settings(
             allow_reset=True,  # Allow resetting for testing
-            is_persistent=persist_directory is not None,
+            is_persistent=self.is_persistent,
             anonymized_telemetry=False,
         )
 
-        if persist_directory:
+        # FIXME: persistent storage doesn't work in multi-threaded environments.
+        #        ("table segments already exist", "database is locked", among other issues)
+        if persist_directory and enable_persist:
             settings.persist_directory = str(persist_directory)
             logger.debug(f"Using persist directory: {persist_directory}")
             self.client = chromadb.PersistentClient(
@@ -44,6 +54,7 @@ class Indexer:
             self.client = chromadb.Client(settings)
 
         def create_collection():
+            assert self.client
             return self.client.get_or_create_collection(
                 name=collection_name, metadata={"hnsw:space": "cosine"}
             )
@@ -67,11 +78,11 @@ class Indexer:
 
     def __del__(self):
         """Cleanup when the indexer is destroyed."""
-        try:
-            self.client.reset()
-        except Exception as e:
-            if "Resetting is not allowed" not in e.args[0]:
-                logger.exception("Error resetting ChromaDB client")
+        if self.client:
+            try:
+                self.client.reset()
+            except Exception as e:
+                logger.warning(f"Error during cleanup: {e}")
 
     def add_document(self, document: Document, timestamp: int | None = None) -> None:
         """Add a single document to the index."""
