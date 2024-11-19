@@ -147,7 +147,7 @@ class Indexer:
                 f"Indexed {processed}/{total_docs} documents ({progress:.1f}%)"
             )
 
-    def index_directory(self, directory: Path, glob_pattern: str = "**/*.*") -> None:
+    def index_directory(self, directory: Path, glob_pattern: str = "**/*.*") -> int:
         """Index all files in a directory matching the glob pattern."""
         directory = directory.resolve()  # Convert to absolute path
         files = list(directory.glob(glob_pattern))
@@ -169,7 +169,7 @@ class Indexer:
             logger.debug(
                 f"No valid documents found in {directory} with pattern {glob_pattern}"
             )
-            return
+            return 0
 
         # Process files in batches to manage memory
         batch_size = 100
@@ -186,6 +186,8 @@ class Indexer:
         # Add any remaining documents
         if current_batch:
             self.add_documents(current_batch)
+
+        return len(valid_files)
 
     def search(
         self,
