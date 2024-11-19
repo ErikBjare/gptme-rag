@@ -1,5 +1,5 @@
 test:
-	poetry run pytest --cov=gptme_rag
+	poetry run pytest --cov=gptme_rag --durations=5
 
 # run linting, typechecking, and tests
 check:

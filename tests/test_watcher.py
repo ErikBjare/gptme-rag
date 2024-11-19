@@ -131,7 +131,7 @@ def test_file_watcher_batch_updates(temp_workspace, indexer: Indexer):
     """Test handling of multiple rapid updates."""
     test_file = temp_workspace / "test.txt"
 
-    def wait_for_index(content: str, retries: int = 15, delay: float = 0.3) -> bool:
+    def wait_for_index(content: str, retries: int = 15, delay: float = 0.1) -> bool:
         """Wait for content to appear in index with retries."""
         logger.info(f"Waiting for content to be indexed: {content}")
         for attempt in range(retries):
@@ -150,7 +150,7 @@ def test_file_watcher_batch_updates(temp_workspace, indexer: Indexer):
 
     with FileWatcher(indexer, [str(temp_workspace)], update_delay=0.2):
         # Wait for watcher to initialize
-        time.sleep(1.0)
+        time.sleep(0.5)
         logger.info("Watcher initialized")
 
         # Make multiple updates
@@ -158,7 +158,6 @@ def test_file_watcher_batch_updates(temp_workspace, indexer: Indexer):
             content = f"Content version {i}"
             logger.info(f"Writing content: {content}")
             test_file.write_text(content)
-            time.sleep(0.3)  # Wait for file to be fully written
 
             # Wait for update to be indexed with retries
             assert wait_for_index(content), f"Update not indexed: '{content}'"
