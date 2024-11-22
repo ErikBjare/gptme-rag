@@ -1,4 +1,5 @@
 import logging
+import sys
 import time
 from fnmatch import fnmatch
 from pathlib import Path
@@ -82,11 +83,21 @@ class Indexer:
 
     def __del__(self):
         """Cleanup when the indexer is destroyed."""
-        if self.client:
-            try:
+        # Skip cleanup during interpreter shutdown
+        if not sys or not hasattr(sys, "modules"):
+            return
+
+        # Skip cleanup if client is None
+        if not hasattr(self, "client") or self.client is None:
+            return
+
+        try:
+            # Only attempt reset if not during shutdown
+            if "chromadb" in sys.modules:
                 self.client.reset()
-            except Exception as e:
-                logger.warning(f"Error during cleanup: {e}")
+        except Exception:
+            # Suppress all errors during cleanup
+            pass
 
     def add_document(self, document: Document, timestamp: int | None = None) -> None:
         """Add a single document to the index."""
