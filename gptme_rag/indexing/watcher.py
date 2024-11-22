@@ -178,17 +178,42 @@ class IndexEventHandler(FileSystemEventHandler):
                         # Read current content for verification
                         current_content = path.read_text()
 
-                        # Clear all documents with this source path
+                        # Clear old versions and index new version atomically
                         try:
-                            self.indexer.collection.delete(
-                                where={"source": canonical_path}
-                            )
-                            logger.info(f"Cleared old versions for: {canonical_path}")
-                        except Exception as e:
-                            logger.warning(f"Error clearing old versions: {e}")
+                            # Delete old versions
+                            self.indexer.delete_documents({"source": canonical_path})
+                            logger.debug(f"Cleared old versions for: {canonical_path}")
 
-                        # Index the new version with retries
-                        max_attempts = 3
+                            # Index the new version immediately to maintain atomicity
+                            max_attempts = 3
+                            for attempt in range(max_attempts):
+                                logger.info(
+                                    f"Indexing attempt {attempt + 1} for {path}"
+                                )
+                                self.indexer.index_file(path)
+
+                                # Verify the update
+                                if self.indexer.verify_document(
+                                    path, content=current_content
+                                ):
+                                    processed_paths.add(canonical_path)
+                                    logger.info(
+                                        f"Successfully verified index update for {path}"
+                                    )
+                                    break
+                                elif attempt < max_attempts - 1:
+                                    logger.warning(
+                                        f"Verification failed, retrying... ({attempt + 1}/{max_attempts})"
+                                    )
+                                    time.sleep(0.5)  # Wait before retry
+                                else:
+                                    logger.error(
+                                        f"Failed to verify index update after {max_attempts} attempts for {path}"
+                                    )
+                        except Exception as e:
+                            logger.error(
+                                f"Error updating index for {path}: {e}", exc_info=True
+                            )
                         for attempt in range(max_attempts):
                             logger.info(f"Indexing attempt {attempt + 1} for {path}")
                             self.indexer.index_file(path)
@@ -259,16 +284,13 @@ class FileWatcher:
             if not path.exists():
                 logger.warning(f"Watch path does not exist: {path}")
                 continue
-            # Clear any existing documents for this path
-            try:
-                for file in path.glob(self.event_handler.pattern):
-                    canonical_path = str(file.resolve())
-                    self.indexer.collection.delete(where={"source": canonical_path})
-            except Exception as e:
-                logger.warning(f"Error clearing existing documents: {e}")
+            # Reset collection before starting
+            self.indexer.reset_collection()
+            logger.debug("Reset collection before starting watcher")
 
             # Index existing files
             self.indexer.index_directory(path, self.event_handler.pattern)
+            logger.debug(f"Indexed existing files in {path}")
             # Set up watching
             self.observer.schedule(self.event_handler, str(path), recursive=True)
 

@@ -4,6 +4,7 @@ import logging
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from collections.abc import Generator
 
 import pytest
 from gptme_rag.indexing.indexer import Indexer
@@ -20,9 +21,19 @@ def temp_workspace():
 
 
 @pytest.fixture
-def indexer(temp_workspace) -> Indexer:
+def indexer(temp_workspace) -> Generator[Indexer, None, None]:
     """Create an indexer for testing."""
-    return Indexer(persist_directory=temp_workspace / "index")
+    idx = Indexer(persist_directory=temp_workspace / "index")
+
+    # Reset collection before test
+    idx.reset_collection()
+    logger.debug("Reset collection before test")
+
+    yield idx
+
+    # Cleanup after test
+    idx.reset_collection()
+    logger.debug("Reset collection after test")
 
 
 def test_file_watcher_basic(temp_workspace, indexer: Indexer):

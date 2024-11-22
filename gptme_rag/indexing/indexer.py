@@ -1,5 +1,4 @@
 import logging
-import sys
 import time
 from fnmatch import fnmatch
 from pathlib import Path
@@ -15,65 +14,65 @@ from .document_processor import DocumentProcessor
 logger = logging.getLogger(__name__)
 
 
+def get_client(settings: Settings | None = None) -> ClientAPI:
+    """Create a new ChromaDB client with the given settings."""
+    if settings is None:
+        settings = Settings(
+            allow_reset=True,
+            is_persistent=False,
+            anonymized_telemetry=False,
+        )
+    return chromadb.Client(settings)
+
+
+def get_collection(client: ClientAPI, name: str) -> Collection:
+    """Get or create a collection with consistent ID."""
+    try:
+        # Try to get existing collection
+        return client.get_collection(name=name)
+    except ValueError:
+        # Create if it doesn't exist
+        return client.create_collection(name=name, metadata={"hnsw:space": "cosine"})
+
+
 class Indexer:
     """Handles document indexing and embedding storage."""
 
-    client: ClientAPI | None = None
-    collection: Collection
     processor: DocumentProcessor
     is_persistent: bool = False
 
     def __init__(
         self,
-        persist_directory: Path | None,
-        collection_name: str = "default",  # Restore default value for backward compatibility
+        persist_directory: Path | None = None,
+        collection_name: str = "default",
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
+        enable_persist: bool = False,  # Default to False due to multi-threading issues
     ):
-        # FIXME: persistent storage doesn't work in multi-threaded environments.
-        #        ("table segments already exist", "database is locked", among other issues)
-        enable_persist = False
-        if persist_directory and enable_persist:
-            self.is_persistent = True
-            persist_directory = Path(persist_directory).expanduser().resolve()
-            persist_directory.mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Using persist directory: {persist_directory}")
+        """Initialize the indexer."""
+        self.collection_name = collection_name
 
+        # Initialize settings
         settings = Settings(
-            allow_reset=True,  # Allow resetting for testing
-            is_persistent=self.is_persistent,
+            allow_reset=True,
+            is_persistent=enable_persist,
             anonymized_telemetry=False,
         )
 
         if persist_directory and enable_persist:
+            self.is_persistent = True
+            persist_directory = Path(persist_directory).expanduser().resolve()
+            persist_directory.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Using persist directory: {persist_directory}")
             settings.persist_directory = str(persist_directory)
-            logger.debug(f"Using persist directory: {persist_directory}")
             self.client = chromadb.PersistentClient(
                 path=str(persist_directory), settings=settings
             )
         else:
-            logger.debug("Using in-memory database")
-            self.client = chromadb.Client(settings)
+            self.client = get_client(settings)
 
-        def create_collection():
-            assert self.client
-            collection = self.client.get_or_create_collection(
-                name=collection_name, metadata={"hnsw:space": "cosine"}
-            )
-            logger.debug(f"Collection ID: {collection.id}, Name: {collection_name}")
-            return collection
-
-        logger.debug(f"Getting or creating collection: {collection_name}")
-        try:
-            self.collection: Collection = create_collection()
-            logger.debug(
-                f"Collection created/retrieved. ID: {self.collection.id}, "
-                f"Name: {collection_name}, Count: {self.collection.count()}"
-            )
-        except Exception as e:
-            logger.exception(f"Error creating collection, resetting: {e}")
-            self.client.reset()
-            self.collection = create_collection()
+        # Initialize collection
+        self.collection = get_collection(self.client, collection_name)
 
         # Initialize document processor
         self.processor = DocumentProcessor(
@@ -81,30 +80,28 @@ class Indexer:
             chunk_overlap=chunk_overlap,
         )
 
-    def __del__(self):
-        """Cleanup when the indexer is destroyed."""
-        # Skip cleanup during interpreter shutdown
-        if not sys or not hasattr(sys, "modules"):
-            return
-
-        # Skip cleanup if client is None
-        if not hasattr(self, "client") or self.client is None:
-            return
-
-        try:
-            # Only attempt reset if not during shutdown
-            if "chromadb" in sys.modules:
-                self.client.reset()
-        except Exception:
-            # Suppress all errors during cleanup
-            pass
-
-    def add_document(self, document: Document, timestamp: int | None = None) -> None:
-        """Add a single document to the index."""
+    def _generate_doc_id(self, document: Document) -> Document:
         if not document.doc_id:
             base = str(hash(document.content))
-            ts = timestamp or int(time.time() * 1000)
+            ts = int(time.time() * 1000)
             document.doc_id = f"{base}-{ts}"
+        return document
+
+    def reset_collection(self) -> None:
+        """Reset the collection to a clean state."""
+        try:
+            self.client.delete_collection(self.collection_name)
+        except ValueError:
+            pass
+        self.collection = self.client.create_collection(
+            name=self.collection_name, metadata={"hnsw:space": "cosine"}
+        )
+        logger.debug(f"Reset collection: {self.collection_name}")
+
+    def add_document(self, document: Document) -> None:
+        """Add a single document to the index."""
+        document = self._generate_doc_id(document)
+        assert document.doc_id is not None
 
         try:
             self.collection.add(
@@ -115,7 +112,23 @@ class Indexer:
             logger.debug(f"Added document with ID: {document.doc_id}")
         except Exception as e:
             logger.error(f"Error adding document: {e}", exc_info=True)
-            raise
+            # Reset collection and retry
+            self.reset_collection()
+            self.collection.add(
+                documents=[document.content],
+                metadatas=[document.metadata],
+                ids=[document.doc_id],
+            )
+
+    def delete_documents(self, where: dict) -> None:
+        """Delete documents matching the where clause."""
+        try:
+            self.collection.delete(where=where)
+            logger.debug(f"Deleted documents matching: {where}")
+        except Exception as e:
+            logger.error(f"Error deleting documents: {e}", exc_info=True)
+            # Reset collection if needed
+            self.reset_collection()
 
     def add_documents(self, documents: list[Document], batch_size: int = 100) -> None:
         """Add multiple documents to the index.
@@ -136,40 +149,15 @@ class Indexer:
                 ids = []
 
                 for doc in batch:
-                    # Generate consistent ID if not provided
-                    if not doc.doc_id:
-                        base_id = str(
-                            hash(
-                                doc.source_path.absolute()
-                                if doc.source_path
-                                else doc.content
-                            )
-                        )
-                        doc.doc_id = (
-                            f"{base_id}#chunk{doc.chunk_index}"
-                            if doc.is_chunk
-                            else base_id
-                        )
+                    doc = self._generate_doc_id(doc)
+                    assert doc.doc_id is not None
 
                     contents.append(doc.content)
                     metadatas.append(doc.metadata)
                     ids.append(doc.doc_id)
 
                 # Add batch to collection
-                try:
-                    self.collection.add(
-                        documents=contents, metadatas=metadatas, ids=ids
-                    )
-                except Exception as e:
-                    logger.debug(f"Collection add failed, recreating collection: {e}")
-                    # Recreate collection and retry
-                    assert self.client
-                    self.collection = self.client.get_or_create_collection(
-                        name=self.collection.name, metadata={"hnsw:space": "cosine"}
-                    )
-                    self.collection.add(
-                        documents=contents, metadatas=metadatas, ids=ids
-                    )
+                self.collection.add(documents=contents, metadatas=metadatas, ids=ids)
 
                 processed += len(batch)
             except Exception as e:
@@ -245,7 +233,6 @@ class Indexer:
                 and not self._is_ignored(f, gitignore_patterns)
             ):
                 valid_files.append(f)
-                logger.debug(f"Found valid file: {f}")
 
             # Check file limit
             if len(valid_files) >= file_limit:
@@ -310,6 +297,7 @@ class Indexer:
         # Get more results if grouping chunks to ensure we have enough unique documents
         query_n_results = n_results * 3 if group_chunks else n_results
 
+        # Add batch to collection
         results = self.collection.query(
             query_texts=[query], n_results=query_n_results, where=where
         )
