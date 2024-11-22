@@ -1,5 +1,6 @@
 import logging
 import time
+from fnmatch import fnmatch
 from pathlib import Path
 
 import chromadb
@@ -24,10 +25,12 @@ class Indexer:
     def __init__(
         self,
         persist_directory: Path | None,
-        collection_name: str = "default",
+        collection_name: str = "default",  # Restore default value for backward compatibility
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ):
+        # FIXME: persistent storage doesn't work in multi-threaded environments.
+        #        ("table segments already exist", "database is locked", among other issues)
         enable_persist = False
         if persist_directory and enable_persist:
             self.is_persistent = True
@@ -41,8 +44,6 @@ class Indexer:
             anonymized_telemetry=False,
         )
 
-        # FIXME: persistent storage doesn't work in multi-threaded environments.
-        #        ("table segments already exist", "database is locked", among other issues)
         if persist_directory and enable_persist:
             settings.persist_directory = str(persist_directory)
             logger.debug(f"Using persist directory: {persist_directory}")
@@ -69,7 +70,7 @@ class Indexer:
                 f"Name: {collection_name}, Count: {self.collection.count()}"
             )
         except Exception as e:
-            logger.error(f"Error creating collection, resetting: {e}")
+            logger.exception(f"Error creating collection, resetting: {e}")
             self.client.reset()
             self.collection = create_collection()
 
@@ -170,19 +171,78 @@ class Indexer:
                 f"Indexed {processed}/{total_docs} documents ({progress:.1f}%)"
             )
 
-    def index_directory(self, directory: Path, glob_pattern: str = "**/*.*") -> int:
-        """Index all files in a directory matching the glob pattern."""
+    def _load_gitignore(self, directory: Path) -> list[str]:
+        """Load gitignore patterns from all .gitignore files up to root."""
+        patterns: list[str] = []
+        current_dir = directory.resolve()
+        max_depth = 10  # Limit traversal to avoid infinite loops
+
+        # Collect all .gitignore files up to root or max depth
+        depth = 0
+        while current_dir.parent != current_dir and depth < max_depth:
+            gitignore_path = current_dir / ".gitignore"
+            if gitignore_path.exists():
+                try:
+                    patterns.extend(
+                        line.strip()
+                        for line in gitignore_path.read_text().splitlines()
+                        if line.strip() and not line.startswith("#")
+                    )
+                except Exception as e:
+                    logger.warning(f"Error reading {gitignore_path}: {e}")
+            current_dir = current_dir.parent
+            depth += 1
+
+        return patterns
+
+    def _is_ignored(self, file_path: Path, gitignore_patterns: list[str]) -> bool:
+        """Check if a file matches any gitignore pattern."""
+
+        # Convert path to relative for pattern matching
+        rel_path = str(file_path)
+
+        for pattern in gitignore_patterns:
+            if fnmatch(rel_path, pattern) or fnmatch(rel_path, f"**/{pattern}"):
+                return True
+        return False
+
+    def index_directory(
+        self, directory: Path, glob_pattern: str = "**/*.*", file_limit: int = 100
+    ) -> int:
+        """Index all files in a directory matching the glob pattern.
+
+        Args:
+            directory: Directory to index
+            glob_pattern: Pattern to match files
+            file_limit: Maximum number of files to index
+
+        Returns:
+            Number of files indexed
+        """
         directory = directory.resolve()  # Convert to absolute path
         files = list(directory.glob(glob_pattern))
 
-        # Filter out database files and get valid files
-        valid_files = [
-            f
-            for f in files
-            if f.is_file()
-            and not f.name.endswith(".sqlite3")
-            and not f.name.endswith(".db")
-        ]
+        # Load gitignore patterns
+        gitignore_patterns = self._load_gitignore(directory)
+
+        # Filter files
+        valid_files = []
+        for f in files:
+            if (
+                f.is_file()
+                and not f.name.endswith((".sqlite3", ".db"))
+                and not self._is_ignored(f, gitignore_patterns)
+            ):
+                valid_files.append(f)
+                logger.debug(f"Found valid file: {f}")
+
+            # Check file limit
+            if len(valid_files) >= file_limit:
+                logger.warning(
+                    f"File limit ({file_limit}) reached. Consider adding patterns to .gitignore "
+                    f"or using a more specific glob pattern than '{glob_pattern}' to exclude unwanted files."
+                )
+                break
 
         logging.debug(f"Found {len(valid_files)} indexable files in {directory}:")
         for f in valid_files:
@@ -208,8 +268,14 @@ class Indexer:
 
         # Add any remaining documents
         if current_batch:
+            logger.debug(
+                f"Adding {len(current_batch)} remaining documents. "
+                f"First doc preview: {current_batch[0].content[:100]}. "
+                f"Paths: {[doc.source_path for doc in current_batch]}"
+            )
             self.add_documents(current_batch)
 
+        logger.info(f"Indexed {len(valid_files)} documents from {directory}")
         return len(valid_files)
 
     def search(
