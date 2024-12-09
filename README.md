@@ -12,6 +12,10 @@ RAG (Retrieval-Augmented Generation) implementation for gptme context management
   <a href="https://github.com/ErikBjare/gptme-rag/blob/master/LICENSE">
     <img src="https://img.shields.io/github/license/ErikBjare/gptme-rag" alt="License" />
   </a>
+  <br>
+  <a href="https://github.com/ErikBjare/gptme">
+    <img src="https://img.shields.io/badge/built%20using-gptme%20%F0%9F%A4%96-5151f5?style=flat" alt="Built using gptme" />
+  </a>
 </p>
 
 ## Features
