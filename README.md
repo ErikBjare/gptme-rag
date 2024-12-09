@@ -72,20 +72,20 @@ poetry install
 
 ```bash
 # Index markdown files in a directory
-poetry run python -m gptme_rag index /path/to/documents --pattern "**/*.md"
+gptme-rag index /path/to/documents --pattern "**/*.md"
 
 # Index with custom persist directory
-poetry run python -m gptme_rag index /path/to/documents --persist-dir ./index
+gptme-rag index /path/to/documents --persist-dir ./index
 ```
 
 ### Searching
 
 ```bash
 # Basic search
-poetry run python -m gptme_rag search "your query here"
+gptme-rag search "your query here"
 
 # Advanced search with options
-poetry run python -m gptme_rag search "your query" \
+gptme-rag search "your query" \
   --n-results 5 \
   --persist-dir ./index \
   --max-tokens 4000 \
@@ -98,10 +98,10 @@ The watch command monitors directories for changes and automatically updates the
 
 ```bash
 # Watch a directory with default settings
-poetry run python -m gptme_rag watch /path/to/documents
+gptme-rag watch /path/to/documents
 
 # Watch with custom pattern and ignore rules
-poetry run python -m gptme_rag watch /path/to/documents \
+gptme-rag watch /path/to/documents \
   --pattern "**/*.{md,py}" \
   --ignore-patterns "*.tmp" "*.log" \
   --persist-dir ./index
@@ -127,17 +127,17 @@ The benchmark commands help measure and optimize performance:
 
 ```bash
 # Benchmark document indexing
-poetry run python -m gptme_rag benchmark indexing /path/to/documents \
+gptme-rag benchmark indexing /path/to/documents \
   --pattern "**/*.md" \
   --persist-dir ./benchmark_index
 
 # Benchmark search performance
-poetry run python -m gptme_rag benchmark search /path/to/documents \
+gptme-rag benchmark search /path/to/documents \
   --queries "python" "documentation" "example" \
   --n-results 10
 
 # Benchmark file watching
-poetry run python -m gptme_rag benchmark watch-perf /path/to/documents \
+gptme-rag benchmark watch-perf /path/to/documents \
   --duration 10 \
   --updates-per-second 5
 ```
@@ -174,12 +174,12 @@ The indexer supports automatic document chunking for efficient processing of lar
 
 ```bash
 # Index with custom chunk settings
-poetry run python -m gptme_rag index /path/to/documents \
+gptme-rag index /path/to/documents \
   --chunk-size 1000 \
   --chunk-overlap 200
 
 # Search with chunk grouping
-poetry run python -m gptme_rag search "your query" \
+gptme-rag search "your query" \
   --group-chunks \
   --n-results 5
 ```
