@@ -83,77 +83,72 @@ def search(
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
-    try:
-        # Hide ChromaDB output during initialization and search
-        with console.status("Initializing..."):
-            # Temporarily redirect stdout to suppress ChromaDB output
-            stdout = sys.stdout
-            sys.stdout = open(os.devnull, "w")
-            try:
-                indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
-                assembler = ContextAssembler(max_tokens=max_tokens)
-                documents, distances = indexer.search(
-                    query, n_results=n_results, paths=paths
-                )
-            finally:
-                sys.stdout.close()
-                sys.stdout = stdout
 
-        # Show a summary of the most relevant documents
-        console.print("\n[bold]Most Relevant Documents:[/bold]")
-        for i, doc in enumerate(documents):
-            source = doc.metadata.get("source", "unknown")
-            distance = distances[i]
-            relevance = 1 - distance  # Convert distance to similarity score
-
-            # Show document header with relevance score
-            console.print(
-                f"\n[cyan]{i+1}. {source}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
+    # Hide ChromaDB output during initialization and search
+    with console.status("Initializing..."):
+        # Temporarily redirect stdout to suppress ChromaDB output
+        stdout = sys.stdout
+        sys.stdout = open(os.devnull, "w")
+        try:
+            indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
+            assembler = ContextAssembler(max_tokens=max_tokens)
+            documents, distances = indexer.search(
+                query, n_results=n_results, paths=paths
             )
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
 
-            # Use file extension as lexer (strip the dot)
+    # Assemble context window
+    context = assembler.assemble_context(documents, user_query=query)
+
+    # if show_context, just print file contents of all matches
+    if show_context:
+        for doc in context.documents:
+            # Display file with syntax highlighting
             lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
-
-            # Extract preview content (first ~200 chars)
-            preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
-
-            # Display with syntax highlighting
             syntax = Syntax(
-                preview,
+                doc.format_xml(),
                 lexer,
                 theme="monokai",
                 word_wrap=True,
             )
             console.print(syntax)
+            console.print()
+        return
 
-        # Assemble context window
-        context = assembler.assemble_context(documents, user_query=query)
+    # Show a summary of the most relevant documents
+    console.print("\n[bold]Most Relevant Documents:[/bold]")
+    for i, doc in enumerate(documents):
+        source = doc.metadata.get("source", "unknown")
+        distance = distances[i]
+        relevance = 1 - distance  # Convert distance to similarity score
 
-        # Show assembled context
-        console.print("\n[bold]Full Context:[/bold]")
-        console.print(f"Total tokens: {context.total_tokens}")
-        console.print(f"Documents included: {len(context.documents)}")
-        console.print(f"Truncated: {context.truncated}")
+        # Show document header with relevance score
+        console.print(
+            f"\n[cyan]{i+1}. {source}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
+        )
 
-        if click.get_current_context().params.get("show_context", False):
-            console.print("\n[bold]Context Content:[/bold]")
-            # Use file extension as lexer (strip the dot)
+        # Use file extension as lexer (strip the dot)
+        lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
 
-            for doc in context.documents:
-                # Display file with syntax highlighting
-                lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
-                syntax = Syntax(
-                    doc.format_xml(),
-                    lexer,
-                    theme="monokai",
-                    word_wrap=True,
-                )
-                console.print(syntax)
-                console.print()
+        # Extract preview content (first ~200 chars)
+        preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
 
-    except Exception:
-        console.print("❌ Error searching index:", style="red")
-        console.print_exception()
+        # Display with syntax highlighting
+        syntax = Syntax(
+            preview,
+            lexer,
+            theme="monokai",
+            word_wrap=True,
+        )
+        console.print(syntax)
+
+    # Show assembled context
+    console.print("\n[bold]Full Context:[/bold]")
+    console.print(f"Total tokens: {context.total_tokens}")
+    console.print(f"Documents included: {len(context.documents)}")
+    console.print(f"Truncated: {context.truncated}")
 
 
 @cli.command()

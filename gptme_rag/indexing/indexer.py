@@ -155,13 +155,16 @@ class Indexer:
             # Reset collection if needed
             self.reset_collection()
 
-    def add_documents(self, documents: list[Document], batch_size: int = 100) -> None:
+    def add_documents(self, documents: list[Document], batch_size: int = 10) -> None:
         """Add multiple documents to the index.
 
         Args:
             documents: List of documents to add
             batch_size: Number of documents to process in each batch
         """
+        logger.info(
+            f"Adding {len(documents)} chunks from {len(set(doc.metadata['source'] for doc in documents))} files"
+        )
         total_docs = len(documents)
         processed = 0
 
@@ -191,7 +194,7 @@ class Indexer:
 
             # Report progress
             progress = (processed / total_docs) * 100
-            logging.debug(
+            logging.info(
                 f"Indexed {processed}/{total_docs} documents ({progress:.1f}%)"
             )
 
@@ -245,7 +248,7 @@ class Indexer:
         return False
 
     def index_directory(
-        self, directory: Path, glob_pattern: str = "**/*.*", file_limit: int = 100
+        self, directory: Path, glob_pattern: str = "**/*.*", file_limit: int = 1000
     ) -> int:
         """Index all files in a directory matching the glob pattern.
 
@@ -269,17 +272,15 @@ class Indexer:
             if f.is_file() and not self._is_ignored(f, gitignore_patterns):
                 valid_files.add(f)
 
-            # Check file limit
-            if len(valid_files) >= file_limit:
-                logger.warning(
-                    f"File limit ({file_limit}) reached. Consider adding patterns to .gitignore "
-                    f"or using a more specific glob pattern than '{glob_pattern}' to exclude unwanted files."
-                )
-                break
+        # Check file limit
+        if len(valid_files) >= file_limit:
+            logger.warning(
+                f"File limit ({file_limit}) reached, was {len(valid_files)}. Consider adding patterns to .gitignore "
+                f"or using a more specific glob pattern than '{glob_pattern}' to exclude unwanted files."
+            )
+            valid_files = set(list(valid_files)[:file_limit])
 
         logging.debug(f"Found {len(valid_files)} indexable files in {directory}:")
-        for f in valid_files:
-            logging.debug(f"  {f.relative_to(directory)}")
 
         if not valid_files:
             logger.debug(
@@ -287,32 +288,15 @@ class Indexer:
             )
             return 0
 
-        # Process files in batches to manage memory
-        batch_size = 100
-        current_batch = []
-
-        def add_docs(docs):
-            if docs:
-                logger.info(
-                    f"Adding {len(docs)} chunks from {len(set(doc.metadata['source'] for doc in docs))} files"
-                )
-                self.add_documents(docs)
-
         logger.info(f"Processing {len(valid_files)} documents from {directory}")
+        chunks = []
         # index least deep first
         for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
             logger.info(f"Processing ./{file_path.relative_to(directory)}")
             # Process each file into chunks
-            for doc in Document.from_file(file_path, processor=self.processor):
-                logger.debug(f"Processing chunk: {doc.source_path} ({doc.chunk_index})")
-                current_batch.append(doc)
-            if len(current_batch) >= batch_size:
-                add_docs(current_batch)
-                current_batch = []
-
-        # Add any remaining documents
-        if current_batch:
-            add_docs(current_batch)
+            for chunk in Document.from_file(file_path, processor=self.processor):
+                chunks.append(chunk)
+        self.add_documents(chunks)
 
         logger.info(f"Indexed {len(valid_files)} files from {directory}")
         return len(valid_files)
