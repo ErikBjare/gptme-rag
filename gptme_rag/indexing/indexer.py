@@ -172,7 +172,17 @@ class Indexer:
 
     def _load_gitignore(self, directory: Path) -> list[str]:
         """Load gitignore patterns from all .gitignore files up to root."""
-        patterns: list[str] = [".git/", ".sqlite3", ".db"]
+        # arguably only .git/** should be here, with the rest in system global gitignore (which should be respected)
+        patterns: list[str] = [
+            ".git/**",
+            "*.sqlite3",
+            "*.db",
+            "*.pyc",
+            "__pycache__",
+            ".*cache/**",
+            "*.lock",
+            ".DS_Store",
+        ]
         current_dir = directory.resolve()
         max_depth = 10  # Limit traversal to avoid infinite loops
 
@@ -201,7 +211,11 @@ class Indexer:
         rel_path = str(file_path)
 
         for pattern in gitignore_patterns:
-            if fnmatch(rel_path, pattern) or fnmatch(rel_path, f"**/{pattern}"):
+            if (
+                fnmatch(rel_path, pattern)
+                or fnmatch(rel_path, f"**/{pattern}")
+                or fnmatch(rel_path, f"**/{pattern}/**")
+            ):
                 return True
         return False
 

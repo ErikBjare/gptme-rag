@@ -28,7 +28,7 @@ class ContextAssembler:
     def _format_document(self, doc: Document) -> str:
         """Format a document for inclusion in the context window."""
         source = doc.metadata.get("source", "unknown")
-        return f"--- From {source} ---\n{doc.content}\n"
+        return f"```{source}\n{doc.content}\n```"
 
     def assemble_context(
         self,

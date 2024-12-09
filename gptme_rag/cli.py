@@ -97,13 +97,13 @@ def search(
         # Show a summary of the most relevant documents
         console.print("\n[bold]Most Relevant Documents:[/bold]")
         for i, doc in enumerate(documents):
-            filename = doc.metadata.get("filename", "unknown")
+            source = doc.metadata.get("source", "unknown")
             distance = distances[i]
             relevance = 1 - distance  # Convert distance to similarity score
 
             # Show document header with relevance score
             console.print(
-                f"\n[cyan]{i+1}. {filename}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
+                f"\n[cyan]{i+1}. {source}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
             )
 
             # Extract first meaningful section (after headers)
@@ -111,17 +111,17 @@ def search(
             content = []
             for line in lines:
                 if line.strip() and not line.startswith("#"):
-                    content.append(line.strip())
-                    if len(" ".join(content)) > 200:
+                    content.append("  " + line + "\n")
+                    if len("".join(content)) > 200:
                         break
 
             # Show the first paragraph or meaningful content
             content_preview = (
-                " ".join(content)[:200] + "..."
-                if len(" ".join(content)) > 200
-                else " ".join(content)
+                "".join(content)[:200] + "..."
+                if len("".join(content)) > 200
+                else "".join(content)
             )
-            console.print(f"  {content_preview}")
+            console.print(f"{content_preview}")
 
         # Assemble context window
         context = assembler.assemble_context(documents, user_query=query)
@@ -158,7 +158,7 @@ def search(
     "--ignore-patterns",
     "-i",
     multiple=True,
-    default=[".git", "__pycache__", "*.pyc"],
+    default=[],
     help="Glob patterns to ignore",
 )
 def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: list[str]):
@@ -174,6 +174,7 @@ def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: lis
         console.print("Starting file watcher...")
 
         try:
+            # TODO: FileWatcher should use same gitignore patterns as indexer
             file_watcher = FileWatcher(
                 indexer, [str(directory)], pattern, ignore_patterns
             )
