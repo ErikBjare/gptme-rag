@@ -1,6 +1,7 @@
 import logging
 import time
 from fnmatch import fnmatch
+from logging import Filter
 from pathlib import Path
 
 import chromadb
@@ -10,6 +11,28 @@ from chromadb.config import Settings
 
 from .document import Document
 from .document_processor import DocumentProcessor
+
+
+class ChromaDBFilter(Filter):
+    """Filter out expected ChromaDB warnings about existing IDs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno == logging.WARNING:
+            # Filter out specific ChromaDB warnings about existing IDs
+            if record.name.startswith("chromadb.segment.impl"):
+                msg = record.getMessage()
+                if "existing embedding ID" in msg:
+                    return False
+        return True
+
+
+# Add filter to ChromaDB loggers
+for logger_name in [
+    "chromadb.segment.impl.metadata.sqlite",
+    "chromadb.segment.impl.vector.local_persistent_hnsw",
+]:
+    logging.getLogger(logger_name).addFilter(ChromaDBFilter())
+
 
 logger = logging.getLogger(__name__)
 
