@@ -1,23 +1,32 @@
+import logging
 import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 import click
 from rich.console import Console
 
+from .benchmark import RagBenchmark
 from .indexing.indexer import Indexer
+from .indexing.watcher import FileWatcher
 from .query.context_assembler import ContextAssembler
 
 console = Console()
 
 # TODO: change this to a more appropriate location
-default_persist_dir = Path(__file__).parent / "data"
+default_persist_dir = Path.home() / ".cache" / "gptme" / "rag"
 
 
 @click.group()
-def cli():
+@click.option("--verbose/-v", is_flag=True, help="Enable verbose output")
+def cli(verbose: bool):
     """RAG implementation for gptme context management."""
-    pass
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(levelname)s - %(name)s - %(message)s",
+    )
 
 
 @cli.command()
@@ -36,20 +45,13 @@ def cli():
 def index(directory: Path, pattern: str, persist_dir: Path):
     """Index documents in a directory."""
     try:
-        indexer = Indexer(persist_directory=persist_dir)
+        indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
         console.print(f"Indexing files in {directory} with pattern {pattern}")
 
-        # List files that will be indexed
-        files = list(directory.glob(pattern))
-        console.print(f"Found {len(files)} files:")
-        for file in files:
-            console.print(f"  - {file}")
-
         # Index the files
-        with console.status(f"Indexing {len(files)} files..."):
-            indexer.index_directory(directory, pattern)
+        n_indexed = indexer.index_directory(directory, pattern)
 
-        console.print(f"✅ Successfully indexed {len(files)} files", style="green")
+        console.print(f"✅ Successfully indexed {n_indexed} files", style="green")
     except Exception as e:
         console.print(f"❌ Error indexing directory: {e}", style="red")
 
@@ -80,7 +82,7 @@ def search(
             stdout = sys.stdout
             sys.stdout = open(os.devnull, "w")
             try:
-                indexer = Indexer(persist_directory=persist_dir)
+                indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
                 assembler = ContextAssembler(max_tokens=max_tokens)
                 documents, distances = indexer.search(query, n_results=n_results)
             finally:
@@ -165,7 +167,6 @@ def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: lis
             indexer.index_directory(directory, pattern)
 
         console.print("Starting file watcher...")
-        from .indexing.watcher import FileWatcher
 
         try:
             file_watcher = FileWatcher(
@@ -174,14 +175,11 @@ def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: lis
             with file_watcher:
                 console.print("Watching for changes. Press Ctrl+C to stop.")
                 # Keep the main thread alive
-                import signal
 
                 try:
                     signal.pause()
                 except AttributeError:  # Windows doesn't have signal.pause
                     while True:
-                        import time
-
                         time.sleep(1)
         except KeyboardInterrupt:
             console.print("\nStopping file watcher...")
@@ -212,7 +210,6 @@ def benchmark():
 )
 def indexing(directory: Path, pattern: str, persist_dir: Path | None):
     """Benchmark document indexing performance."""
-    from .benchmark import RagBenchmark
 
     benchmark = RagBenchmark(index_dir=persist_dir)
 
@@ -252,7 +249,6 @@ def search_benchmark(
     persist_dir: Path | None,
 ):
     """Benchmark search performance."""
-    from .benchmark import RagBenchmark
 
     benchmark = RagBenchmark(index_dir=persist_dir)
 
@@ -296,7 +292,6 @@ def watch_perf(
     persist_dir: Path | None,
 ):
     """Benchmark file watching performance."""
-    from .benchmark import RagBenchmark
 
     benchmark = RagBenchmark(index_dir=persist_dir)
 

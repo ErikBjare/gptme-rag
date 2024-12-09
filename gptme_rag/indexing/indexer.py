@@ -172,7 +172,7 @@ class Indexer:
 
     def _load_gitignore(self, directory: Path) -> list[str]:
         """Load gitignore patterns from all .gitignore files up to root."""
-        patterns: list[str] = []
+        patterns: list[str] = [".git/", ".sqlite3", ".db"]
         current_dir = directory.resolve()
         max_depth = 10  # Limit traversal to avoid infinite loops
 
@@ -225,14 +225,10 @@ class Indexer:
         gitignore_patterns = self._load_gitignore(directory)
 
         # Filter files
-        valid_files = []
+        valid_files = set()
         for f in files:
-            if (
-                f.is_file()
-                and not f.name.endswith((".sqlite3", ".db"))
-                and not self._is_ignored(f, gitignore_patterns)
-            ):
-                valid_files.append(f)
+            if f.is_file() and not self._is_ignored(f, gitignore_patterns):
+                valid_files.add(f)
 
             # Check file limit
             if len(valid_files) >= file_limit:
@@ -257,20 +253,20 @@ class Indexer:
         current_batch = []
 
         for file_path in valid_files:
+            logger.debug(f"Processing file: {file_path}")
             # Process each file into chunks
             for doc in Document.from_file(file_path, processor=self.processor):
+                logger.debug(f"Processing chunk: {doc.source_path} ({doc.chunk_index})")
                 current_batch.append(doc)
                 if len(current_batch) >= batch_size:
+                    logger.info(f"Adding {len(current_batch)} documents")
                     self.add_documents(current_batch)
                     current_batch = []
 
         # Add any remaining documents
         if current_batch:
-            logger.debug(
-                f"Adding {len(current_batch)} remaining documents. "
-                f"First doc preview: {current_batch[0].content[:100]}. "
-                f"Paths: {[doc.source_path for doc in current_batch]}"
-            )
+            self.add_documents(current_batch)
+            logger.info(f"Adding {len(current_batch)} documents.")
             self.add_documents(current_batch)
 
         logger.info(f"Indexed {len(valid_files)} documents from {directory}")
@@ -339,6 +335,52 @@ class Indexer:
                 documents.append(doc)
 
         return documents, distances[: len(documents)]
+
+    def list_documents(self, group_by_source: bool = True) -> list[Document]:
+        """List all documents in the index.
+
+        Args:
+            group_by_source: Whether to group chunks from the same document
+
+        Returns:
+            List of documents
+        """
+        # Get all documents from collection
+        results = self.collection.get()
+
+        if not results["ids"]:
+            return []
+
+        if group_by_source:
+            # Group chunks by source document
+            doc_groups: dict[str, list[Document]] = {}
+
+            for i, doc_id in enumerate(results["ids"]):
+                doc = Document(
+                    content=results["documents"][i],
+                    metadata=results["metadatas"][i],
+                    doc_id=doc_id,
+                )
+
+                # Get source document ID (remove chunk suffix if present)
+                source_id = doc_id.split("#chunk")[0]
+
+                if source_id not in doc_groups:
+                    doc_groups[source_id] = []
+                doc_groups[source_id].append(doc)
+
+            # Return first chunk from each document group
+            return [chunks[0] for chunks in doc_groups.values()]
+        else:
+            # Return all documents/chunks
+            return [
+                Document(
+                    content=results["documents"][i],
+                    metadata=results["metadatas"][i],
+                    doc_id=doc_id,
+                )
+                for i, doc_id in enumerate(results["ids"])
+            ]
 
     def get_document_chunks(self, doc_id: str) -> list[Document]:
         """Get all chunks for a document.
