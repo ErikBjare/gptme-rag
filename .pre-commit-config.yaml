@@ -26,4 +26,4 @@ repos:
     entry: make test
     language: system
     pass_filenames: false
-    always_run: true
+    # always_run: true
