@@ -1,6 +1,8 @@
 # gptme-rag
 
-RAG (Retrieval-Augmented Generation) implementation for gptme context management.
+A powerful RAG (Retrieval-Augmented Generation) system that enhances AI interactions by providing relevant context from your local files. Built primarily for [gptme](https://github.com/ErikBjare/gptme), but can be used standalone.
+
+RAG systems improve AI responses by retrieving and incorporating relevant information from a knowledge base into the generation process. This leads to more accurate, contextual, and factual responses.
 
 <p align="center">
   <a href="https://github.com/ErikBjare/gptme-rag/actions/workflows/test.yml">
@@ -44,22 +46,25 @@ RAG (Retrieval-Augmented Generation) implementation for gptme context management
   - Context assembly
   - File watching
 
-## Installation
+## Quick Start
 
 ```bash
-# Using pip
-pip install gptme-rag
+# Install (requires Python 3.10+)
+pipx install gptme-rag  # or: pip install gptme-rag
 
-# Using pipx (recommended for CLI tools)
-pipx install gptme-rag
+# Index your documents
+gptme-rag index ./docs --pattern "**/*.md"
 
-# From source (for development)
+# Search
+gptme-rag search "What is the architecture of the system?"
+```
+
+For development installation:
+```bash
 git clone https://github.com/ErikBjare/gptme-rag.git
 cd gptme-rag
 poetry install
 ```
-
-After installation, the `gptme-rag` command will be available in your terminal.
 
 ## Usage
 
@@ -270,12 +275,15 @@ Releases are automated through GitHub Actions. The process is:
 
 ## Integration with gptme
 
-This package is designed to integrate with [gptme](https://github.com/ErikBjare/gptme) as a plugin, providing:
+This package is designed to integrate with [gptme](https://github.com/ErikBjare/gptme) to provide AI assistants with relevant context from your local files. When used with gptme, it:
 
-- Automatic context enhancement
-- Semantic search across project files
-- Knowledge base integration
-- Smart context assembly
+- Automatically indexes your project files
+- Enhances AI responses with relevant context
+- Provides semantic search across your codebase
+- Maintains a persistent knowledge base
+- Assembles context intelligently within token limits
+
+To use with gptme, simply install both packages and gptme will automatically detect and use gptme-rag for context management.
 
 ## License
 
