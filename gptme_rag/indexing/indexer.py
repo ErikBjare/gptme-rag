@@ -275,6 +275,7 @@ class Indexer:
     def search(
         self,
         query: str,
+        paths: list[Path] | None = None,
         n_results: int = 5,
         where: dict | None = None,
         group_chunks: bool = True,
@@ -294,6 +295,7 @@ class Indexer:
         query_n_results = n_results * 3 if group_chunks else n_results
 
         # Add batch to collection
+        # TODO: can we do file filtering here to ensure we get exactly n_results?
         results = self.collection.query(
             query_texts=[query], n_results=query_n_results, where=where
         )
@@ -311,6 +313,14 @@ class Indexer:
                     metadata=results["metadatas"][0][i],
                     doc_id=doc_id,
                 )
+
+                path = doc.metadata.get("source", "unknown")
+                if paths:
+                    matches_paths = [
+                        filter_path in Path(path).parents for filter_path in paths
+                    ]
+                    if not any(matches_paths):
+                        continue
 
                 # Get source document ID (remove chunk suffix if present)
                 source_id = doc_id.split("#chunk")[0]

@@ -58,6 +58,7 @@ def index(directory: Path, pattern: str, persist_dir: Path):
 
 @cli.command()
 @click.argument("query")
+@click.argument("paths", nargs=-1, type=click.Path(path_type=Path))
 @click.option("--n-results", "-n", default=5, help="Number of results to return")
 @click.option(
     "--persist-dir",
@@ -69,12 +70,14 @@ def index(directory: Path, pattern: str, persist_dir: Path):
 @click.option("--show-context", is_flag=True, help="Show the full context content")
 def search(
     query: str,
+    paths: list[Path],
     n_results: int,
     persist_dir: Path,
     max_tokens: int,
     show_context: bool,
 ):
     """Search the index and assemble context."""
+    paths = [path.resolve() for path in paths]
     try:
         # Hide ChromaDB output during initialization and search
         with console.status("Initializing..."):
@@ -84,7 +87,9 @@ def search(
             try:
                 indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
                 assembler = ContextAssembler(max_tokens=max_tokens)
-                documents, distances = indexer.search(query, n_results=n_results)
+                documents, distances = indexer.search(
+                    query, n_results=n_results, paths=paths
+                )
             finally:
                 sys.stdout.close()
                 sys.stdout = stdout
