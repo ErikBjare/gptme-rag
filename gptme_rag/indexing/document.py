@@ -1,10 +1,19 @@
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from collections.abc import Generator
 
 from .document_processor import DocumentProcessor
+
+
+def xml_file(lang: str, code: str) -> str:
+    return f"<file lang='{lang}'>\n{code}\n</file>"
+
+
+def md_codeblock(lang: str, code: str) -> str:
+    """Format a code block for Markdown."""
+    return f"```{lang}\n{code}\n```"
 
 
 @dataclass
@@ -98,3 +107,13 @@ class Document:
         chunk_index = self.chunk_index  # Now we know it's not None
         total_chunks = self.metadata.get("total_chunks", chunk_index + 1)
         return (chunk_index, total_chunks)
+
+    def format_xml(self) -> str:
+        """Format the document as an XML object."""
+        source = self.metadata.get("source", "unknown")
+        return xml_file(source, self.content)
+
+    def format_md(self) -> str:
+        """Format the document as a Markdown code block."""
+        source = self.metadata.get("source", "unknown")
+        return md_codeblock(source, self.content)

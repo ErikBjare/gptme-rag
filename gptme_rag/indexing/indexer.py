@@ -63,6 +63,7 @@ class Indexer:
 
     processor: DocumentProcessor
     is_persistent: bool = False
+    persist_directory: Path | None
 
     def __init__(
         self,
@@ -84,14 +85,15 @@ class Indexer:
 
         if persist_directory and enable_persist:
             self.is_persistent = True
-            persist_directory = Path(persist_directory).expanduser().resolve()
-            persist_directory.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Using persist directory: {persist_directory}")
-            settings.persist_directory = str(persist_directory)
+            self.persist_directory = Path(persist_directory).expanduser().resolve()
+            self.persist_directory.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Using persist directory: {self.persist_directory}")
+            settings.persist_directory = str(self.persist_directory)
             self.client = chromadb.PersistentClient(
-                path=str(persist_directory), settings=settings
+                path=str(self.persist_directory), settings=settings
             )
         else:
+            self.persist_directory = None
             self.client = get_client(settings)
 
         # Initialize collection
@@ -197,12 +199,12 @@ class Indexer:
         """Load gitignore patterns from all .gitignore files up to root."""
         # arguably only .git/** should be here, with the rest in system global gitignore (which should be respected)
         patterns: list[str] = [
-            ".git/**",
+            ".git",
             "*.sqlite3",
             "*.db",
             "*.pyc",
             "__pycache__",
-            ".*cache/**",
+            ".*cache",
             "*.lock",
             ".DS_Store",
         ]
@@ -289,24 +291,30 @@ class Indexer:
         batch_size = 100
         current_batch = []
 
-        for file_path in valid_files:
-            logger.debug(f"Processing file: {file_path}")
+        def add_docs(docs):
+            if docs:
+                logger.info(
+                    f"Adding {len(docs)} chunks from {len(set(doc.metadata['source'] for doc in docs))} files"
+                )
+                self.add_documents(docs)
+
+        logger.info(f"Processing {len(valid_files)} documents from {directory}")
+        # index least deep first
+        for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
+            logger.info(f"Processing ./{file_path.relative_to(directory)}")
             # Process each file into chunks
             for doc in Document.from_file(file_path, processor=self.processor):
                 logger.debug(f"Processing chunk: {doc.source_path} ({doc.chunk_index})")
                 current_batch.append(doc)
-                if len(current_batch) >= batch_size:
-                    logger.info(f"Adding {len(current_batch)} documents")
-                    self.add_documents(current_batch)
-                    current_batch = []
+            if len(current_batch) >= batch_size:
+                add_docs(current_batch)
+                current_batch = []
 
         # Add any remaining documents
         if current_batch:
-            self.add_documents(current_batch)
-            logger.info(f"Adding {len(current_batch)} documents.")
-            self.add_documents(current_batch)
+            add_docs(current_batch)
 
-        logger.info(f"Indexed {len(valid_files)} documents from {directory}")
+        logger.info(f"Indexed {len(valid_files)} files from {directory}")
         return len(valid_files)
 
     def search(
@@ -525,6 +533,50 @@ class Indexer:
 
         logger.warning(f"Failed to verify document after {retries} attempts: {path}")
         return False
+
+    def get_status(self) -> dict:
+        """Get status information about the index.
+
+        Returns:
+            dict: Status information including:
+                - collection_name: Name of the collection
+                - storage_type: "persistent" or "in-memory"
+                - persist_directory: Path to persist directory (if persistent)
+                - document_count: Number of unique source documents
+                - chunk_count: Total number of chunks
+                - source_stats: Statistics about document sources
+                - config: Basic configuration information
+        """
+        # Get all documents to analyze
+        results = self.collection.get()
+
+        # Count unique source documents
+        sources = set()
+        source_stats: dict[str, int] = {}  # Extension -> count
+
+        for metadata in results["metadatas"]:
+            if metadata and "source" in metadata:
+                sources.add(metadata["source"])
+                # Get file extension statistics
+                ext = Path(metadata["source"]).suffix
+                source_stats[ext] = source_stats.get(ext, 0) + 1
+
+        status = {
+            "collection_name": self.collection_name,
+            "storage_type": "persistent" if self.is_persistent else "in-memory",
+            "document_count": len(sources),
+            "chunk_count": len(results["ids"]) if results["ids"] else 0,
+            "source_stats": source_stats,
+            "config": {
+                "chunk_size": self.processor.chunk_size,
+                "chunk_overlap": self.processor.chunk_overlap,
+            },
+        }
+
+        if self.is_persistent and self.persist_directory:
+            status["persist_directory"] = str(self.persist_directory)
+
+        return status
 
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document and all its chunks from the index.

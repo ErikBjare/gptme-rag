@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 import tiktoken
 
 from ..indexing.document import Document
@@ -27,8 +28,7 @@ class ContextAssembler:
 
     def _format_document(self, doc: Document) -> str:
         """Format a document for inclusion in the context window."""
-        source = doc.metadata.get("source", "unknown")
-        return f"```{source}\n{doc.content}\n```"
+        return doc.format_xml()
 
     def assemble_context(
         self,

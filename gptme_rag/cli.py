@@ -7,6 +7,8 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.logging import RichHandler
+from rich.syntax import Syntax
 
 from .benchmark import RagBenchmark
 from .indexing.indexer import Indexer
@@ -23,9 +25,12 @@ default_persist_dir = Path.home() / ".cache" / "gptme" / "rag"
 @click.option("--verbose/-v", is_flag=True, help="Enable verbose output")
 def cli(verbose: bool):
     """RAG implementation for gptme context management."""
+    handler = RichHandler()
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
-        format="%(levelname)s - %(name)s - %(message)s",
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[handler],
     )
 
 
@@ -106,22 +111,20 @@ def search(
                 f"\n[cyan]{i+1}. {source}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
             )
 
-            # Extract first meaningful section (after headers)
-            lines = doc.content.split("\n")
-            content = []
-            for line in lines:
-                if line.strip() and not line.startswith("#"):
-                    content.append("  " + line + "\n")
-                    if len("".join(content)) > 200:
-                        break
+            # Use file extension as lexer (strip the dot)
+            lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
 
-            # Show the first paragraph or meaningful content
-            content_preview = (
-                "".join(content)[:200] + "..."
-                if len("".join(content)) > 200
-                else "".join(content)
+            # Extract preview content (first ~200 chars)
+            preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
+
+            # Display with syntax highlighting
+            syntax = Syntax(
+                preview,
+                lexer,
+                theme="monokai",
+                word_wrap=True,
             )
-            console.print(f"{content_preview}")
+            console.print(syntax)
 
         # Assemble context window
         context = assembler.assemble_context(documents, user_query=query)
@@ -134,7 +137,19 @@ def search(
 
         if click.get_current_context().params.get("show_context", False):
             console.print("\n[bold]Context Content:[/bold]")
-            console.print(context.content)
+            # Use file extension as lexer (strip the dot)
+
+            for doc in context.documents:
+                # Display file with syntax highlighting
+                lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
+                syntax = Syntax(
+                    doc.format_xml(),
+                    lexer,
+                    theme="monokai",
+                    word_wrap=True,
+                )
+                console.print(syntax)
+                console.print()
 
     except Exception:
         console.print("❌ Error searching index:", style="red")
@@ -164,7 +179,7 @@ def search(
 def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: list[str]):
     """Watch directory for changes and update index automatically."""
     try:
-        indexer = Indexer(persist_directory=persist_dir)
+        indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
 
         # Initial indexing
         console.print(f"Performing initial indexing of {directory}")
@@ -193,6 +208,61 @@ def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: lis
     except Exception as e:
         console.print(f"❌ Error watching directory: {e}", style="red")
         console.print_exception()
+
+
+@cli.command()
+def status():
+    """Show the status of the index."""
+    try:
+        with console.status("Getting index status..."):
+            indexer = Indexer(
+                persist_directory=default_persist_dir, enable_persist=True
+            )
+            status = indexer.get_status()
+
+        # Print basic information
+        console.print("\n[bold]Index Status[/bold]")
+        console.print(f"Collection: [cyan]{status['collection_name']}[/cyan]")
+        console.print(f"Storage Type: [cyan]{status['storage_type']}[/cyan]")
+        if "persist_directory" in status:
+            console.print(
+                f"Persist Directory: [cyan]{status['persist_directory']}[/cyan]"
+            )
+
+        # Print document statistics
+        console.print("\n[bold]Document Statistics[/bold]")
+        console.print(f"Total Documents: [green]{status['document_count']:,}[/green]")
+        console.print(f"Total Chunks: [green]{status['chunk_count']:,}[/green]")
+
+        # Print source statistics
+        if status["source_stats"]:
+            console.print("\n[bold]Source Statistics[/bold]")
+            for ext, count in sorted(
+                status["source_stats"].items(), key=lambda x: x[1], reverse=True
+            ):
+                ext_display = ext if ext else "no extension"
+                percentage = (
+                    (count / status["chunk_count"]) * 100
+                    if status["chunk_count"]
+                    else 0
+                )
+                console.print(
+                    f"  {ext_display:12} [yellow]{count:4}[/yellow] chunks ([yellow]{percentage:4.1f}%[/yellow])"
+                )
+
+        # Print configuration
+        console.print("\n[bold]Configuration[/bold]")
+        console.print(
+            f"Chunk Size: [blue]{status['config']['chunk_size']:,}[/blue] tokens"
+        )
+        console.print(
+            f"Chunk Overlap: [blue]{status['config']['chunk_overlap']:,}[/blue] tokens"
+        )
+
+    except Exception as e:
+        console.print(f"❌ Error getting index status: {e}", style="red")
+        if logging.getLogger().level <= logging.DEBUG:
+            console.print_exception()
 
 
 @cli.group()
