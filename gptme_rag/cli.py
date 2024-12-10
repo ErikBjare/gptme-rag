@@ -73,6 +73,7 @@ def index(directory: Path, pattern: str, persist_dir: Path):
 )
 @click.option("--max-tokens", default=4000, help="Maximum tokens in context window")
 @click.option("--show-context", is_flag=True, help="Show the full context content")
+@click.option("--raw", is_flag=True, help="Skip syntax highlighting")
 def search(
     query: str,
     paths: list[Path],
@@ -80,6 +81,7 @@ def search(
     persist_dir: Path,
     max_tokens: int,
     show_context: bool,
+    raw: bool,
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
@@ -107,13 +109,17 @@ def search(
         for doc in context.documents:
             # Display file with syntax highlighting
             lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
-            syntax = Syntax(
-                doc.format_xml(),
-                lexer,
-                theme="monokai",
-                word_wrap=True,
+            output = doc.format_xml()
+            console.print(
+                output
+                if raw
+                else Syntax(
+                    output,
+                    lexer,
+                    theme="monokai",
+                    word_wrap=True,
+                )
             )
-            console.print(syntax)
             console.print()
         return
 
