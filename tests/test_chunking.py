@@ -50,30 +50,11 @@ def test_document_chunking(test_file):
 
 def test_indexing_with_chunks(test_file, indexer):
     """Test indexing documents with chunking enabled."""
-    # Debug: Print test file content
-    content = test_file.read_text()
-    print("\nTest file content:")
-    print(f"Size: {len(content)} chars")
-    print("First 200 chars:")
-    print(content[:200])
-
     # Index the test file
-    print("\nIndexing directory:", test_file.parent)
-    n_indexed = indexer.index_directory(test_file.parent)
-    print(f"Indexed {n_indexed} files")
-
-    # Debug collection state
-    print("\nCollection state:")
-    indexer.debug_collection()
+    indexer.index_directory(test_file.parent)
 
     # Search should return results
-    print("\nSearching for 'Lorem ipsum'...")
     docs, distances, _ = indexer.search("Lorem ipsum", n_results=5)
-    print(f"Found {len(docs)} documents")
-    for i, doc in enumerate(docs):
-        print(f"\nDoc {i}:")
-        print(f"ID: {doc.doc_id}")
-        print(f"Content: {doc.content[:100]}...")
 
     assert len(docs) > 0, "No documents found in search results"
     assert len(distances) == len(docs), "Distances don't match documents"
@@ -127,24 +108,11 @@ def test_document_reconstruction(test_file, indexer):
 
 def test_chunk_retrieval(test_file, indexer):
     """Test retrieving all chunks for a document."""
-    # Debug: Print test file content
-    content = test_file.read_text()
-    print(f"\nTest file size: {len(content)} chars")
-    print(f"Token count: {len(indexer.processor.encoding.encode(content))}")
-
     # Index the test file
-    print("\nIndexing file...")
     indexer.index_file(test_file)
 
     # Get a document ID from search results
-    print("\nSearching...")
-    docs, _, _ = indexer.search("Lorem ipsum")  # Search for text we know exists
-    print(f"Found {len(docs)} documents")
-    for i, doc in enumerate(docs):
-        print(f"\nDoc {i}:")
-        print(f"ID: {doc.doc_id}")
-        print(f"Content length: {len(doc.content)}")
-        print(f"Is chunk: {doc.is_chunk}")
+    docs, _, _ = indexer.search("Lorem ipsum")
     base_doc_id = docs[0].doc_id
     assert base_doc_id is not None
     doc_id = base_doc_id.split("#chunk")[0]
@@ -153,11 +121,12 @@ def test_chunk_retrieval(test_file, indexer):
     chunks = indexer.get_document_chunks(doc_id)
 
     # Check chunks
-    assert len(chunks) > 1
-    assert all(chunk.is_chunk for chunk in chunks)
+    assert len(chunks) > 1, "Document should be split into multiple chunks"
+    assert all(chunk.is_chunk for chunk in chunks), "All items should be chunks"
     assert all(
         chunk.doc_id is not None and chunk.doc_id.startswith(doc_id) for chunk in chunks
-    )
+    ), "All chunks should belong to the same document"
+
     # Check chunks are in order
-    chunk_indices = [chunk.chunk_index or 0 for chunk in chunks]  # Default to 0 if None
-    assert chunk_indices == sorted(chunk_indices)
+    chunk_indices = [chunk.chunk_index or 0 for chunk in chunks]
+    assert chunk_indices == sorted(chunk_indices), "Chunks should be in order"

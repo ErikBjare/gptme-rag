@@ -316,24 +316,15 @@ class Indexer:
             logger.debug("Using git ls-files for file listing")
         except subprocess.CalledProcessError:
             # Not a git repo or git not available, fall back to glob
-            print("\nFalling back to glob + gitignore for file listing")
             files = list(directory.glob(glob_pattern))
-            print(
-                f"Found {len(files)} files matching glob pattern: {[str(f) for f in files]}"
-            )
             gitignore_patterns = self._load_gitignore(directory)
-            print(f"Loaded gitignore patterns: {gitignore_patterns}")
-        print(f"\nProcessing files in {directory}")
-        for f in files:
-            print(f"\nChecking file: {f}")
 
+        for f in files:
             if not f.is_file():
-                print("  Skip: Not a file")
                 continue
 
             # Check gitignore patterns if in glob mode
             if gitignore_patterns and self._is_ignored(f, gitignore_patterns):
-                print("  Skip: Matches gitignore pattern")
                 continue
 
             # Filter by glob pattern
@@ -341,17 +332,14 @@ class Indexer:
             # Convert glob pattern to fnmatch pattern
             fnmatch_pattern = glob_pattern.replace("**/*", "*")
             if not fnmatch_path(rel_path, fnmatch_pattern):
-                print(f"  Skip: Does not match pattern {fnmatch_pattern}")
                 continue
-            print(f"  Pass: Matches pattern {fnmatch_pattern}")
 
             # Resolve symlinks to target
             try:
                 resolved = f.resolve()
                 valid_files.add(resolved)
-                print(f"  Added: {resolved}")
             except Exception as e:
-                print(f"  Error: Could not resolve path - {e}")
+                logger.warning(f"Error resolving symlink: {f} -> {e}")
 
         # Check file limit
         if len(valid_files) >= file_limit:
