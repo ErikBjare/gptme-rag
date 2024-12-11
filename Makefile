@@ -4,3 +4,6 @@ test:
 # run linting, typechecking, and tests
 check:
 	pre-commit run --all-files
+
+typecheck:
+	pre-commit run mypy --all-files

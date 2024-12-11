@@ -1,8 +1,10 @@
 import logging
+import subprocess
 import time
-from fnmatch import fnmatch
+from fnmatch import fnmatch as fnmatch_path
 from logging import Filter
 from pathlib import Path
+from typing import Any
 
 import chromadb
 from chromadb import Collection
@@ -72,6 +74,7 @@ class Indexer:
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
         enable_persist: bool = False,  # Default to False due to multi-threading issues
+        scoring_weights: dict | None = None,
     ):
         """Initialize the indexer."""
         self.collection_name = collection_name
@@ -104,6 +107,15 @@ class Indexer:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
+
+        # Initialize scoring weights with defaults
+        self.scoring_weights = {
+            "term_overlap": 0.4,  # Term frequency scoring
+            "depth_penalty": 0.1,  # Path depth penalty (max)
+            "recency_boost": 0.1,  # Recent files (max)
+        }
+        if scoring_weights:
+            self.scoring_weights.update(scoring_weights)
 
     def _generate_doc_id(self, document: Document) -> Document:
         if not document.doc_id:
@@ -200,17 +212,29 @@ class Indexer:
 
     def _load_gitignore(self, directory: Path) -> list[str]:
         """Load gitignore patterns from all .gitignore files up to root."""
-        # arguably only .git/** should be here, with the rest in system global gitignore (which should be respected)
-        patterns: list[str] = [
-            ".git",
-            "*.sqlite3",
-            "*.db",
-            "*.pyc",
-            "__pycache__",
-            ".*cache",
-            "*.lock",
-            ".DS_Store",
-        ]
+        patterns: list[str] = []
+
+        # Load global gitignore
+        global_gitignore = Path.home() / ".config/git/ignore"
+        if global_gitignore.exists():
+            try:
+                with open(global_gitignore) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            patterns.append(line)
+            except Exception as e:
+                logger.warning(f"Error reading global gitignore: {e}")
+
+        # Essential patterns for non-git directories
+        patterns.extend(
+            [
+                ".git",
+                ".git/**",  # Ensure .git dirs are always ignored
+                "*.sqlite3",
+                "*.db",
+            ]
+        )
         current_dir = directory.resolve()
         max_depth = 10  # Limit traversal to avoid infinite loops
 
@@ -240,9 +264,9 @@ class Indexer:
 
         for pattern in gitignore_patterns:
             if (
-                fnmatch(rel_path, pattern)
-                or fnmatch(rel_path, f"**/{pattern}")
-                or fnmatch(rel_path, f"**/{pattern}/**")
+                fnmatch_path(rel_path, pattern)
+                or fnmatch_path(rel_path, f"**/{pattern}")
+                or fnmatch_path(rel_path, f"**/{pattern}/**")
             ):
                 return True
         return False
@@ -261,16 +285,73 @@ class Indexer:
             Number of files indexed
         """
         directory = directory.resolve()  # Convert to absolute path
-        files = list(directory.glob(glob_pattern))
-
-        # Load gitignore patterns
-        gitignore_patterns = self._load_gitignore(directory)
-
-        # Filter files
         valid_files = set()
+
+        try:
+            # Try git ls-files first
+            # Check if directory is in a git repo using -C option to avoid directory changes
+            subprocess.run(
+                ["git", "-C", str(directory), "rev-parse", "--git-dir"],
+                capture_output=True,
+                check=True,
+            )
+
+            # Get list of tracked files
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(directory),
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            files = [directory / line for line in result.stdout.splitlines()]
+            gitignore_patterns = None  # No need for gitignore in git mode
+            logger.debug("Using git ls-files for file listing")
+        except subprocess.CalledProcessError:
+            # Not a git repo or git not available, fall back to glob
+            print("\nFalling back to glob + gitignore for file listing")
+            files = list(directory.glob(glob_pattern))
+            print(
+                f"Found {len(files)} files matching glob pattern: {[str(f) for f in files]}"
+            )
+            gitignore_patterns = self._load_gitignore(directory)
+            print(f"Loaded gitignore patterns: {gitignore_patterns}")
+        print(f"\nProcessing files in {directory}")
         for f in files:
-            if f.is_file() and not self._is_ignored(f, gitignore_patterns):
-                valid_files.add(f)
+            print(f"\nChecking file: {f}")
+
+            if not f.is_file():
+                print("  Skip: Not a file")
+                continue
+
+            # Check gitignore patterns if in glob mode
+            if gitignore_patterns and self._is_ignored(f, gitignore_patterns):
+                print("  Skip: Matches gitignore pattern")
+                continue
+
+            # Filter by glob pattern
+            rel_path = str(f.relative_to(directory))
+            # Convert glob pattern to fnmatch pattern
+            fnmatch_pattern = glob_pattern.replace("**/*", "*")
+            if not fnmatch_path(rel_path, fnmatch_pattern):
+                print(f"  Skip: Does not match pattern {fnmatch_pattern}")
+                continue
+            print(f"  Pass: Matches pattern {fnmatch_pattern}")
+
+            # Resolve symlinks to target
+            try:
+                resolved = f.resolve()
+                valid_files.add(resolved)
+                print(f"  Added: {resolved}")
+            except Exception as e:
+                print(f"  Error: Could not resolve path - {e}")
 
         # Check file limit
         if len(valid_files) >= file_limit:
@@ -301,6 +382,99 @@ class Indexer:
         logger.info(f"Indexed {len(valid_files)} files from {directory}")
         return len(valid_files)
 
+    def debug_collection(self):
+        """Debug function to check collection state."""
+        # Get all documents
+        results = self.collection.get()
+
+        # Print unique document IDs
+        unique_ids = set(results["ids"])
+        print(f"\nUnique document IDs: {len(unique_ids)} of {len(results['ids'])}")
+
+        # Print a few example documents
+        print("\nExample documents:")
+        for i in range(min(3, len(results["ids"]))):
+            print(f"\nDoc {i}:")
+            print(f"ID: {results['ids'][i]}")
+            print(f"Content (first 100 chars): {results['documents'][i][:100]}...")
+            print(f"Metadata: {results['metadatas'][i]}")
+
+        # Now do a test search
+        print("\nTest search for 'Lorem ipsum':")
+        search_results = self.collection.query(query_texts=["Lorem ipsum"], n_results=3)
+        print("\nRaw search results:")
+        print(f"IDs: {search_results['ids'][0]}")
+        print(f"Distances: {search_results['distances'][0]}")
+
+    def compute_relevance_score(
+        self,
+        doc: Document,
+        distance: float,
+        query: str,
+        debug: bool = False,
+    ) -> tuple[float, dict[str, float]]:
+        """Compute a relevance score for a document based on multiple factors.
+
+        Args:
+            doc: The document to score
+            distance: The embedding distance from the query
+            query: The search query
+            debug: Whether to log debug information
+
+        Returns:
+            tuple[float, dict[str, float]]: The total score and a dictionary of individual scores
+        """
+        scores = {}
+
+        # Base similarity score (convert distance to similarity)
+        scores["base"] = 1 - distance
+        total_score = scores["base"]
+
+        # Term matches (simple tf scoring)
+        query_terms = set(query.lower().split())
+        content_terms = set(doc.content.lower().split())
+        term_overlap = len(query_terms & content_terms) / len(query_terms)
+        scores["term_overlap"] = self.scoring_weights["term_overlap"] * term_overlap
+        total_score += scores["term_overlap"]
+
+        # Metadata boosts
+        if doc.metadata:
+            # Path depth penalty
+            path_depth = len(Path(doc.metadata.get("source", "")).parts)
+            max_depth = 10  # Normalize depth to max of 10 levels
+            depth_factor = min(path_depth / max_depth, 1.0)
+            scores["depth_penalty"] = (
+                -self.scoring_weights["depth_penalty"] * depth_factor
+            )
+            total_score += scores["depth_penalty"]
+
+            # Recency boost
+            scores["recency_boost"] = 0
+            if "last_modified" in doc.metadata:
+                try:
+                    last_modified = float(doc.metadata["last_modified"])
+                    days_ago = (time.time() - last_modified) / (24 * 3600)
+                    if days_ago < 30:  # 30-day window for recency
+                        recency_factor = 1 - (days_ago / 30)
+                        scores["recency_boost"] = (
+                            self.scoring_weights["recency_boost"] * recency_factor
+                        )
+                        total_score += scores["recency_boost"]
+                except (ValueError, TypeError):
+                    logger.debug(
+                        f"Invalid last_modified timestamp: {doc.metadata['last_modified']}"
+                    )
+
+        # Log scoring breakdown if debug is enabled
+        if debug and logger.isEnabledFor(logging.DEBUG):
+            source = doc.metadata.get("source", "unknown")
+            logger.debug(f"\nScoring breakdown for {source}:")
+            for factor, score in scores.items():
+                logger.debug(f"  {factor:15}: {score:+.3f}")
+            logger.debug(f"  {'total':15}: {total_score:.3f}")
+
+        return total_score, scores
+
     def search(
         self,
         query: str,
@@ -308,72 +482,159 @@ class Indexer:
         n_results: int = 5,
         where: dict | None = None,
         group_chunks: bool = True,
-    ) -> tuple[list[Document], list[float]]:
+        max_attempts: int = 3,
+        explain: bool = False,
+    ) -> tuple[list[Document], list[float], list[dict[str, Any]] | None]:
+        # Debug collection state
+        self.debug_collection()
         """Search for documents similar to the query.
 
         Args:
             query: Search query
+            paths: List of paths to filter results by
             n_results: Number of results to return
             where: Optional filter conditions
-            group_chunks: Whether to group chunks from the same document
+            max_attempts: Maximum number of attempts to get enough results
+            explain: Whether to include scoring explanations
 
         Returns:
-            tuple: (list of Documents, list of distances)
+            If explain=False: tuple[list[Document], list[float]]
+            If explain=True: tuple[list[Document], list[float], list[dict]]
         """
-        # Get more results if grouping chunks to ensure we have enough unique documents
+        documents: list[Document] = []
+        distances: list[float] = []
+        explanations: list[dict[str, Any]] = [] if explain else []
+        current_attempt = 0
         query_n_results = n_results * 3 if group_chunks else n_results
 
-        # Add batch to collection
-        # TODO: can we do file filtering here to ensure we get exactly n_results?
-        results = self.collection.query(
-            query_texts=[query], n_results=query_n_results, where=where
-        )
+        while len(documents) < n_results and current_attempt < max_attempts:
+            # Increase n_results on subsequent attempts
+            if current_attempt > 0:
+                query_n_results *= 2
 
-        documents = []
-        distances = results["distances"][0] if "distances" in results else []
+            # Get more results if we're going to filter by path
+            if paths:
+                query_n_results *= len(paths) * 2
 
-        # Group chunks by source document if requested
+            # Query without path filtering
+            logger.debug(f"Querying with n_results={query_n_results}")
+
+            # Query the collection
+            results = self.collection.query(
+                query_texts=[query], n_results=query_n_results, where=where
+            )
+
+            if not results["ids"][0]:
+                break
+
+            # Debug the raw results
+            print("\nRaw query results:")
+            print(f"IDs: {results['ids']}")
+            print(f"Documents: {results['documents']}")
+            print(f"Metadatas: {results['metadatas']}")
+            print(f"Distances: {results['distances']}")
+
+            result_distances = results["distances"][0] if "distances" in results else []
+
+            # Group chunks by source document if requested
+            if group_chunks:
+                doc_groups: dict[str, list[tuple[Document, float]]] = {}
+
+                # First pass: collect all chunks for each document
+                for i, doc_id in enumerate(results["ids"][0]):
+                    doc = Document(
+                        content=results["documents"][0][i],
+                        metadata=results["metadatas"][0][i],
+                        doc_id=doc_id,
+                    )
+
+                    # Filter by path if paths specified
+                    if paths:
+                        source = doc.metadata.get("source", "")
+                        if not source:
+                            continue
+                        source_path = Path(source)
+                        # Check if document is in any of the specified paths
+                        if not any(
+                            path.resolve() in source_path.parents
+                            or path.resolve() == source_path
+                            for path in paths
+                        ):
+                            continue
+
+                    # Get source document ID (remove chunk suffix if present)
+                    source_id = doc_id.split("#chunk")[0]
+
+                    if source_id not in doc_groups:
+                        doc_groups[source_id] = []
+                    doc_groups[source_id].append((doc, result_distances[i]))
+
+                logger.debug(f"Found {len(doc_groups)} documents after filtering")
+
+                # Take the best chunk from each document
+                for source_docs in list(doc_groups.values()):
+                    if len(documents) >= n_results:
+                        break
+
+                    # Enhanced ranking using multiple signals
+
+                    # Sort by enhanced relevance score and collect explanations if requested
+                    scored_docs = []
+                    for doc, distance in source_docs:
+                        score, score_breakdown = self.compute_relevance_score(
+                            doc, distance, query, debug=explain
+                        )
+                        if explain:
+                            explanation = self.explain_scoring(
+                                query, doc, distance, score_breakdown
+                            )
+                            scored_docs.append((doc, distance, score, explanation))
+                        else:
+                            scored_docs.append((doc, distance, score, {}))
+
+                    # Sort by score and take the best
+                    best = max(scored_docs, key=lambda x: x[2])
+                    best_doc, best_distance = best[0], best[1]
+                    if explain:
+                        explanations.append(best[3])
+
+                    documents.append(best_doc)
+                    distances.append(best_distance)
+
+            current_attempt += 1
+
+        # Return results with explanations if requested
         if group_chunks:
-            doc_groups: dict[str, list[tuple[Document, float]]] = {}
+            # Results already processed in the group_chunks block
+            pass
+        else:
+            # Return individual chunks, limited to n_results
+            documents = []
+            distances = []
+            seen_ids = set()
 
             for i, doc_id in enumerate(results["ids"][0]):
-                doc = Document(
-                    content=results["documents"][0][i],
-                    metadata=results["metadatas"][0][i],
-                    doc_id=doc_id,
-                )
+                if len(documents) >= n_results:
+                    break
 
-                path = doc.metadata.get("source", "unknown")
-                if paths:
-                    matches_paths = [
-                        filter_path in Path(path).parents for filter_path in paths
-                    ]
-                    if not any(matches_paths):
-                        continue
+                # For non-grouped results, use the full doc_id
+                if doc_id not in seen_ids:
+                    doc = Document(
+                        content=results["documents"][0][i],
+                        metadata=results["metadatas"][0][i],
+                        doc_id=doc_id,
+                    )
+                    documents.append(doc)
+                    distances.append(result_distances[i])
+                    seen_ids.add(doc_id)
 
-                # Get source document ID (remove chunk suffix if present)
-                source_id = doc_id.split("#chunk")[0]
+        # Ensure we don't return more than n_results
+        documents = documents[:n_results]
+        distances = distances[:n_results]
+        if explanations:
+            explanations = explanations[:n_results]
 
-                if source_id not in doc_groups:
-                    doc_groups[source_id] = []
-                doc_groups[source_id].append((doc, distances[i]))
-
-            # Take the best chunk from each document
-            for source_docs in list(doc_groups.values())[:n_results]:
-                best_doc, best_distance = min(source_docs, key=lambda x: x[1])
-                documents.append(best_doc)
-                distances[len(documents) - 1] = best_distance
-        else:
-            # Return individual chunks
-            for i, doc_id in enumerate(results["ids"][0][:n_results]):
-                doc = Document(
-                    content=results["documents"][0][i],
-                    metadata=results["metadatas"][0][i],
-                    doc_id=doc_id,
-                )
-                documents.append(doc)
-
-        return documents, distances[: len(documents)]
+        return documents, distances, explanations
 
     def list_documents(self, group_by_source: bool = True) -> list[Document]:
         """List all documents in the index.
@@ -421,25 +682,28 @@ class Indexer:
                 for i, doc_id in enumerate(results["ids"])
             ]
 
-    def get_document_chunks(self, doc_id: str) -> list[Document]:
+    def get_document_chunks(self, base_doc_id: str) -> list[Document]:
         """Get all chunks for a document.
 
         Args:
-            doc_id: Base document ID (without chunk suffix)
+            base_doc_id: Base document ID (without chunk suffix)
 
         Returns:
             List of document chunks, ordered by chunk index
         """
-        results = self.collection.get(where={"source": doc_id})
+        # Get all documents from collection
+        all_docs = self.collection.get()
 
+        # Filter chunks belonging to this document
         chunks = []
-        for i, chunk_id in enumerate(results["ids"]):
-            chunk = Document(
-                content=results["documents"][i],
-                metadata=results["metadatas"][i],
-                doc_id=chunk_id,
-            )
-            chunks.append(chunk)
+        for i, doc_id in enumerate(all_docs["ids"]):
+            if doc_id.startswith(base_doc_id):
+                chunk = Document(
+                    content=all_docs["documents"][i],
+                    metadata=all_docs["metadatas"][i],
+                    doc_id=doc_id,
+                )
+                chunks.append(chunk)
 
         # Sort chunks by index
         chunks.sort(key=lambda x: x.chunk_index or 0)
@@ -504,7 +768,7 @@ class Indexer:
 
         for attempt in range(retries):
             try:
-                results, _ = self.search(
+                results, _, _ = self.search(
                     search_content, n_results=1, where={"source": canonical_path}
                 )
                 if results and search_content in results[0].content:
@@ -517,6 +781,64 @@ class Indexer:
 
         logger.warning(f"Failed to verify document after {retries} attempts: {path}")
         return False
+
+    def explain_scoring(
+        self, query: str, doc: Document, distance: float, scores: dict[str, float]
+    ) -> dict:
+        """Explain the scoring breakdown for a document.
+
+        Args:
+            query: The search query
+            doc: The document being scored
+            distance: The embedding distance from ChromaDB
+            scores: Score breakdown from compute_relevance_score
+
+        Returns:
+            dict: Detailed scoring breakdown with explanations
+        """
+        explanations = {}
+
+        # Base similarity score
+        explanations["base"] = f"Embedding similarity: {scores['base']:.3f}"
+
+        # Term overlap
+        query_terms = set(query.lower().split())
+        content_terms = set(doc.content.lower().split())
+        term_overlap = len(query_terms & content_terms) / len(query_terms)
+        explanations["term_overlap"] = (
+            f"Term overlap {term_overlap:.1%}: +{scores['term_overlap']:.3f}"
+        )
+
+        # Path depth
+        if "depth_penalty" in scores:
+            path_depth = len(Path(doc.metadata.get("source", "")).parts)
+            explanations["depth_penalty"] = (
+                f"Path depth {path_depth}: {scores['depth_penalty']:.3f}"
+            )
+
+        # Recency
+        if "recency_boost" in scores:
+            if doc.metadata and "last_modified" in doc.metadata:
+                try:
+                    last_modified = float(doc.metadata["last_modified"])
+                    days_ago = (time.time() - last_modified) / (24 * 3600)
+                    if days_ago < 30:
+                        explanations["recency_boost"] = (
+                            f"Modified {days_ago:.1f} days ago: +{scores['recency_boost']:.3f}"
+                        )
+                    else:
+                        explanations["recency_boost"] = (
+                            f"Modified {days_ago:.1f} days ago: +0"
+                        )
+                except (ValueError, TypeError):
+                    explanations["recency_boost"] = "Invalid modification time: +0"
+
+        return {
+            "scores": scores,
+            "explanations": explanations,
+            "total_score": sum(scores.values()),
+            "weights": self.scoring_weights,
+        }
 
     def get_status(self) -> dict:
         """Get status information about the index.
@@ -588,12 +910,17 @@ class Indexer:
             logger.error(f"Error deleting document {doc_id}: {e}")
             return False
 
-    def index_file(self, path: Path) -> None:
+    def index_file(self, path: Path) -> int:
         """Index a single file.
 
         Args:
             path: Path to the file to index
+
+        Returns:
+            Number of documents indexed
         """
         documents = list(Document.from_file(path, processor=self.processor))
         if documents:
             self.add_documents(documents)
+            return len(documents)
+        return 0

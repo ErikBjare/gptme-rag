@@ -84,7 +84,7 @@ def main(query: str | None, index_dir: Path, interactive: bool, show_content: bo
         def do_search(search_query: str):
             """Perform search and display results."""
             # Search with chunk grouping
-            documents, distances = indexer.search(
+            documents, distances, _ = indexer.search(
                 search_query,
                 n_results=5,
                 group_chunks=True,

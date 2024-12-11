@@ -44,3 +44,4 @@ benchmark_index/
 
 # Test coverage
 .coverage
+benchmark_data

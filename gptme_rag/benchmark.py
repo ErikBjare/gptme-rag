@@ -169,7 +169,7 @@ class RagBenchmark:
             )
             total_results = 0
             for query in queries:
-                results, _ = indexer.search(query, n_results=n_results)
+                results, _, _ = indexer.search(query, n_results=n_results)
                 total_results += len(results)
             return {
                 "items_processed": len(queries),

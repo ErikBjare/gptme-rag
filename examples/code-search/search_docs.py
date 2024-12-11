@@ -80,7 +80,7 @@ def main():
                     continue
 
                 # Search with chunk grouping
-                documents, distances = indexer.search(
+                documents, distances, _ = indexer.search(
                     query,
                     n_results=5,
                     group_chunks=True,

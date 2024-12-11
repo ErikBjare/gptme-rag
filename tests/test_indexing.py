@@ -59,7 +59,7 @@ def test_indexer_add_document(temp_dir, test_docs):
 
     # Add single document
     indexer.add_document(test_docs[0])
-    results, distances = indexer.search("Python programming")
+    results, distances, _ = indexer.search("Python programming")
 
     assert len(results) > 0
     assert "Python programming" in results[0].content
@@ -73,13 +73,13 @@ def test_indexer_add_documents(temp_dir, test_docs):
     indexer.add_documents(test_docs)
 
     # Search for programming-related content
-    prog_results, prog_distances = indexer.search("programming")
+    prog_results, prog_distances, _ = indexer.search("programming")
     assert len(prog_results) > 0
     assert any("Python" in doc.content for doc in prog_results)
     assert len(prog_distances) > 0
 
     # Search for ML-related content
-    ml_results, ml_distances = indexer.search("machine learning")
+    ml_results, ml_distances, _ = indexer.search("machine learning")
     assert len(ml_results) > 0
     assert any("machine learning" in doc.content.lower() for doc in ml_results)
     assert len(ml_distances) > 0
@@ -96,9 +96,9 @@ def test_indexer_directory(temp_dir):
     indexer.index_directory(temp_dir)
 
     # Search for programming languages
-    python_results, python_distances = indexer.search("Python")
-    js_results, js_distances = indexer.search("JavaScript")
-    ts_results, ts_distances = indexer.search("TypeScript")
+    python_results, python_distances, _ = indexer.search("Python")
+    js_results, js_distances, _ = indexer.search("JavaScript")
+    ts_results, ts_distances, _ = indexer.search("TypeScript")
 
     assert len(python_results) > 0
     assert len(js_results) > 0
