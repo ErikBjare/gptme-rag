@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import signal
@@ -9,6 +10,7 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.syntax import Syntax
+from tqdm import tqdm
 
 from .benchmark import RagBenchmark
 from .indexing.indexer import Indexer
@@ -16,6 +18,7 @@ from .indexing.watcher import FileWatcher
 from .query.context_assembler import ContextAssembler
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 # TODO: change this to a more appropriate location
 default_persist_dir = Path.home() / ".cache" / "gptme" / "rag"
@@ -53,23 +56,45 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
 
     try:
         indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
-        total_indexed = 0
 
-        for path in paths:
-            if path.is_file():
-                console.print(f"Indexing file: {path}")
-                n_indexed = indexer.index_file(path)
-                if n_indexed is not None:
-                    total_indexed += n_indexed
-            else:
-                console.print(f"Indexing files in {path} with pattern {pattern}")
-                n_indexed = indexer.index_directory(path, pattern)
-                if n_indexed is not None:
-                    total_indexed += n_indexed
+        # First, collect all documents
+        all_documents = []
+        with console.status("Collecting documents...") as status:
+            for path in paths:
+                if path.is_file():
+                    status.update(f"Processing file: {path}")
+                else:
+                    status.update(f"Processing directory: {path}")
+                documents = indexer.collect_documents(path)
+                all_documents.extend(documents)
 
-        console.print(f"✅ Successfully indexed {total_indexed} files", style="green")
+        if not all_documents:
+            console.print("No documents found to index", style="yellow")
+            return
+
+        # Then process them with a progress bar
+        n_files = len(set(doc.metadata.get("source", "") for doc in all_documents))
+        n_chunks = len(all_documents)
+
+        logger.info(f"Found {n_files} files to index ({n_chunks} chunks)")
+
+        with tqdm(
+            total=n_chunks,
+            desc="Indexing documents",
+            unit="chunk",
+            disable=not sys.stdout.isatty(),
+        ) as pbar:
+            for progress in indexer.add_documents_progress(all_documents):
+                pbar.update(progress)
+
+        console.print(
+            f"✅ Successfully indexed {n_files} files ({n_chunks} chunks)",
+            style="green",
+        )
     except Exception as e:
         console.print(f"❌ Error indexing directory: {e}", style="red")
+        if logger.isEnabledFor(logging.DEBUG):
+            console.print_exception()
 
 
 @cli.command()
@@ -111,8 +136,6 @@ def search(
         scoring_weights = None
         if weights:
             try:
-                import json
-
                 scoring_weights = json.loads(weights)
             except json.JSONDecodeError as e:
                 console.print(f"❌ Invalid weights JSON: {e}", style="red")

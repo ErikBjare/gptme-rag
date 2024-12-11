@@ -1,6 +1,7 @@
 import logging
 import subprocess
 import time
+from collections.abc import Generator
 from fnmatch import fnmatch as fnmatch_path
 from logging import Filter
 from pathlib import Path
@@ -174,41 +175,40 @@ class Indexer:
             documents: List of documents to add
             batch_size: Number of documents to process in each batch
         """
-        logger.info(
-            f"Adding {len(documents)} chunks from {len(set(doc.metadata['source'] for doc in documents))} files"
-        )
-        total_docs = len(documents)
+        list(self.add_documents_progress(documents, batch_size=batch_size))
+
+    def add_documents_progress(
+        self, documents: list[Document], batch_size: int = 10
+    ) -> Generator[int, None, None]:
+        n_files = len(set(doc.metadata["source"] for doc in documents))
+        logger.debug(f"Adding {len(documents)} chunks from {n_files} files")
+
         processed = 0
+        while processed < len(documents):
+            batch = documents[processed : processed + batch_size]
+            self._add_documents(batch)
+            processed += len(batch)
+            yield processed
 
-        while processed < total_docs:
-            try:
-                # Process a batch of documents
-                batch = documents[processed : processed + batch_size]
-                contents = []
-                metadatas = []
-                ids = []
+    def _add_documents(self, documents: list[Document]) -> None:
+        try:
+            contents = []
+            metadatas = []
+            ids = []
 
-                for doc in batch:
-                    doc = self._generate_doc_id(doc)
-                    assert doc.doc_id is not None
+            for doc in documents:
+                doc = self._generate_doc_id(doc)
+                assert doc.doc_id is not None
 
-                    contents.append(doc.content)
-                    metadatas.append(doc.metadata)
-                    ids.append(doc.doc_id)
+                contents.append(doc.content)
+                metadatas.append(doc.metadata)
+                ids.append(doc.doc_id)
 
-                # Add batch to collection
-                self.collection.add(documents=contents, metadatas=metadatas, ids=ids)
-
-                processed += len(batch)
-            except Exception as e:
-                logger.error(f"Failed to process batch: {e}")
-                raise
-
-            # Report progress
-            progress = (processed / total_docs) * 100
-            logging.info(
-                f"Indexed {processed}/{total_docs} documents ({progress:.1f}%)"
-            )
+            # Add batch to collection
+            self.collection.add(documents=contents, metadatas=metadatas, ids=ids)
+        except Exception as e:
+            logger.error(f"Failed to process batch: {e}")
+            raise
 
     def _load_gitignore(self, directory: Path) -> list[str]:
         """Load gitignore patterns from all .gitignore files up to root."""
@@ -272,7 +272,9 @@ class Indexer:
         return False
 
     def index_directory(
-        self, directory: Path, glob_pattern: str = "**/*.*", file_limit: int = 1000
+        self,
+        directory: Path,
+        glob_pattern: str = "**/*.*",
     ) -> int:
         """Index all files in a directory matching the glob pattern.
 
@@ -285,90 +287,21 @@ class Indexer:
             Number of files indexed
         """
         directory = directory.resolve()  # Convert to absolute path
-        valid_files = set()
 
-        try:
-            # Try git ls-files first
-            # Check if directory is in a git repo using -C option to avoid directory changes
-            subprocess.run(
-                ["git", "-C", str(directory), "rev-parse", "--git-dir"],
-                capture_output=True,
-                check=True,
-            )
+        # Collect documents using the new method
+        documents = self.collect_documents(directory, glob_pattern)
 
-            # Get list of tracked files
-            result = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(directory),
-                    "ls-files",
-                    "--cached",
-                    "--others",
-                    "--exclude-standard",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            files = [directory / line for line in result.stdout.splitlines()]
-            gitignore_patterns = None  # No need for gitignore in git mode
-            logger.debug("Using git ls-files for file listing")
-        except subprocess.CalledProcessError:
-            # Not a git repo or git not available, fall back to glob
-            files = list(directory.glob(glob_pattern))
-            gitignore_patterns = self._load_gitignore(directory)
-
-        for f in files:
-            if not f.is_file():
-                continue
-
-            # Check gitignore patterns if in glob mode
-            if gitignore_patterns and self._is_ignored(f, gitignore_patterns):
-                continue
-
-            # Filter by glob pattern
-            rel_path = str(f.relative_to(directory))
-            # Convert glob pattern to fnmatch pattern
-            fnmatch_pattern = glob_pattern.replace("**/*", "*")
-            if not fnmatch_path(rel_path, fnmatch_pattern):
-                continue
-
-            # Resolve symlinks to target
-            try:
-                resolved = f.resolve()
-                valid_files.add(resolved)
-            except Exception as e:
-                logger.warning(f"Error resolving symlink: {f} -> {e}")
-
-        # Check file limit
-        if len(valid_files) >= file_limit:
-            logger.warning(
-                f"File limit ({file_limit}) reached, was {len(valid_files)}. Consider adding patterns to .gitignore "
-                f"or using a more specific glob pattern than '{glob_pattern}' to exclude unwanted files."
-            )
-            valid_files = set(list(valid_files)[:file_limit])
-
-        logging.debug(f"Found {len(valid_files)} indexable files in {directory}:")
-
-        if not valid_files:
-            logger.debug(
-                f"No valid documents found in {directory} with pattern {glob_pattern}"
-            )
+        if not documents:
             return 0
 
-        logger.info(f"Processing {len(valid_files)} documents from {directory}")
-        chunks = []
-        # index least deep first
-        for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
-            logger.info(f"Processing ./{file_path.relative_to(directory)}")
-            # Process each file into chunks
-            for chunk in Document.from_file(file_path, processor=self.processor):
-                chunks.append(chunk)
-        self.add_documents(chunks)
+        # Get unique file count
+        n_files = len(set(doc.metadata.get("source", "") for doc in documents))
 
-        logger.info(f"Indexed {len(valid_files)} files from {directory}")
-        return len(valid_files)
+        # Process the documents
+        self.add_documents(documents)
+
+        logger.info(f"Indexed {n_files} files from {directory}")
+        return n_files
 
     def debug_collection(self):
         """Debug function to check collection state."""
@@ -846,6 +779,118 @@ class Indexer:
             logger.error(f"Error deleting document {doc_id}: {e}")
             return False
 
+    def _get_valid_files(
+        self, path: Path, glob_pattern: str = "**/*.*", file_limit: int = 1000
+    ) -> set[Path]:
+        """Get valid files for indexing from a path.
+
+        Args:
+            path: Path to scan (file or directory)
+            glob_pattern: Pattern to match files (only used for directories)
+            file_limit: Maximum number of files to return
+
+        Returns:
+            Set of valid file paths
+        """
+        valid_files = set()
+        path = path.resolve()  # Resolve path first
+
+        # If it's a file, just validate it
+        if path.is_file():
+            valid_files.add(path)
+            return valid_files
+
+        # For directories, use git ls-files if possible
+        try:
+            # Check if directory is in a git repo
+            subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--git-dir"],
+                capture_output=True,
+                check=True,
+            )
+
+            # Get list of tracked files
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(path),
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            files = [path / line for line in result.stdout.splitlines()]
+            gitignore_patterns = None  # No need for gitignore in git mode
+            logger.debug("Using git ls-files for file listing")
+        except subprocess.CalledProcessError:
+            # Not a git repo or git not available, fall back to glob
+            files = list(path.glob(glob_pattern))
+            gitignore_patterns = self._load_gitignore(path)
+
+        for f in files:
+            if not f.is_file():
+                continue
+
+            # Check gitignore patterns if in glob mode
+            if gitignore_patterns and self._is_ignored(f, gitignore_patterns):
+                continue
+
+            # Filter by glob pattern if it's not from git ls-files
+            if gitignore_patterns:  # Only check pattern if using glob
+                rel_path = str(f.relative_to(path))
+                # Convert glob pattern to fnmatch pattern
+                fnmatch_pattern = glob_pattern.replace("**/*", "*")
+                if not fnmatch_path(rel_path, fnmatch_pattern):
+                    continue
+
+            # Resolve symlinks to target
+            try:
+                resolved = f.resolve()
+                valid_files.add(resolved)
+            except Exception as e:
+                logger.warning(f"Error resolving symlink: {f} -> {e}")
+
+        # Check file limit
+        if len(valid_files) >= file_limit:
+            logger.warning(
+                f"File limit ({file_limit}) reached, was {len(valid_files)}. Consider adding patterns to .gitignore "
+                f"or using a more specific glob pattern than '{glob_pattern}' to exclude unwanted files."
+            )
+            valid_files = set(list(valid_files)[:file_limit])
+
+        return valid_files
+
+    def collect_documents(
+        self, path: Path, glob_pattern: str = "**/*.*"
+    ) -> list[Document]:
+        """Collect documents from a file or directory without processing them.
+
+        Args:
+            path: Path to collect documents from
+            glob_pattern: Pattern to match files (only used for directories)
+
+        Returns:
+            List of documents ready for processing
+        """
+        documents: list[Document] = []
+        valid_files = self._get_valid_files(path, glob_pattern)
+
+        if not valid_files:
+            logger.debug(f"No valid files found in {path}")
+            return documents
+
+        # Process files in order (least deep first)
+        for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
+            logger.debug(f"Processing {file_path}")
+            documents.extend(Document.from_file(file_path, processor=self.processor))
+
+        return documents
+
     def index_file(self, path: Path) -> int:
         """Index a single file.
 
@@ -855,7 +900,7 @@ class Indexer:
         Returns:
             Number of documents indexed
         """
-        documents = list(Document.from_file(path, processor=self.processor))
+        documents = self.collect_documents(path)
         if documents:
             self.add_documents(documents)
             return len(documents)
