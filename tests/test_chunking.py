@@ -21,7 +21,8 @@ def test_file():
             paragraphs.extend(
                 [
                     f"# Section {i}",
-                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 10,  # Much longer paragraphs
+                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
+                    * 10,  # Much longer paragraphs
                     "Ut enim ad minim veniam, quis nostrud exercitation ullamco. " * 10,
                     "Duis aute irure dolor in reprehenderit in voluptate velit. " * 10,
                     "",  # Empty line between sections
@@ -95,6 +96,8 @@ def test_chunk_grouping(test_file):
             persist_directory=Path(index_dir),
             chunk_size=50,  # Smaller chunk size to ensure multiple chunks
             chunk_overlap=10,
+            enable_persist=True,  # Enable persistent storage
+            collection_name="test_chunk_grouping",  # Unique collection name
         )
 
         # Index the test file
