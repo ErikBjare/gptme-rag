@@ -122,6 +122,7 @@ def test_file_watcher_batch_updates(tmp_path, indexer):
             if results and content in results[0].content:
                 return True
             time.sleep(0.5)
+        logger.debug(f"Content not found within timeout: {content}")
         return False
 
     with FileWatcher(indexer, [str(tmp_path)], update_delay=0.5):
@@ -133,7 +134,9 @@ def test_file_watcher_batch_updates(tmp_path, indexer):
             content = f"Content version {i}"
             test_file.write_text(content)
             time.sleep(1.0)  # Wait between updates
-            assert verify_content(content), f"Content not found: {content}"
+            if not verify_content(content):
+                logger.error(f"Failed to verify content: {content}")
+                raise AssertionError(f"Content not found: {content}")
 
         # Verify final state
         results, _, _ = indexer.search("Content version")
