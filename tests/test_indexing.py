@@ -1,18 +1,5 @@
-from pathlib import Path
 import pytest
-import tempfile
-import chromadb
 from gptme_rag.indexing.document import Document
-from gptme_rag.indexing.indexer import Indexer
-
-
-@pytest.fixture(autouse=True)
-def cleanup_chroma():
-    """Clean up ChromaDB between tests."""
-    yield
-    # Reset the ChromaDB client system
-    if hasattr(chromadb.api.client.SharedSystemClient, "_identifer_to_system"):
-        chromadb.api.client.SharedSystemClient._identifer_to_system = {}
 
 
 @pytest.fixture
@@ -31,15 +18,9 @@ def test_docs():
     ]
 
 
-@pytest.fixture
-def temp_dir():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-def test_document_from_file(temp_dir):
+def test_document_from_file(tmp_path):
     # Create a test file
-    test_file = temp_dir / "test.txt"
+    test_file = tmp_path / "test.txt"
     test_content = "Test content"
     test_file.write_text(test_content)
 
@@ -54,9 +35,7 @@ def test_document_from_file(temp_dir):
     assert doc.metadata["extension"] == ".txt"
 
 
-def test_indexer_add_document(temp_dir, test_docs):
-    indexer = Indexer(persist_directory=temp_dir)
-
+def test_indexer_add_document(indexer, test_docs):
     # Add single document
     indexer.add_document(test_docs[0])
     results, distances, _ = indexer.search("Python programming")
@@ -66,14 +45,7 @@ def test_indexer_add_document(temp_dir, test_docs):
     assert len(distances) > 0
 
 
-def test_indexer_add_documents(temp_dir, test_docs):
-    # Create indexer with unique collection name
-    indexer = Indexer(
-        persist_directory=temp_dir,
-        collection_name="test_add_documents",
-        enable_persist=True,
-    )
-
+def test_indexer_add_documents(indexer, test_docs):
     # Reset collection to ensure clean state
     indexer.reset_collection()
 
@@ -99,15 +71,14 @@ def test_indexer_add_documents(temp_dir, test_docs):
     assert len(ml_distances) > 0, "No distances returned"
 
 
-def test_indexer_directory(temp_dir):
+def test_indexer_directory(indexer, tmp_path):
     # Create test files
-    (temp_dir / "test1.txt").write_text("Content about Python")
-    (temp_dir / "test2.txt").write_text("Content about JavaScript")
-    (temp_dir / "subdir").mkdir()
-    (temp_dir / "subdir" / "test3.txt").write_text("Content about TypeScript")
+    (tmp_path / "test1.txt").write_text("Content about Python")
+    (tmp_path / "test2.txt").write_text("Content about JavaScript")
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "subdir" / "test3.txt").write_text("Content about TypeScript")
 
-    indexer = Indexer(persist_directory=temp_dir / "index")
-    indexer.index_directory(temp_dir)
+    indexer.index_directory(tmp_path)
 
     # Search for programming languages
     python_results, python_distances, _ = indexer.search("Python")
