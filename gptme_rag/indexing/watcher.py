@@ -100,7 +100,7 @@ class IndexEventHandler(FileSystemEventHandler):
                         self.indexer.index_file(dest_path)
 
                         # Verify the update with content-based search
-                        results, _ = self.indexer.search(
+                        results, _, _ = self.indexer.search(
                             content[:50]
                         )  # Search by content prefix
                         if results and any(
@@ -131,6 +131,74 @@ class IndexEventHandler(FileSystemEventHandler):
                                 f"Failed to process moved file after {max_attempts} attempts: {e}"
                             )
 
+    def _should_skip_file(self, path: Path, processed_paths: set[str]) -> bool:
+        """Check if a file should be skipped during processing."""
+        canonical_path = str(path.resolve())
+        if (
+            canonical_path in processed_paths
+            or not path.is_file()
+            or path.suffix in {".sqlite3", ".db", ".bin", ".pyc"}
+        ):
+            logger.debug(f"Skipping {canonical_path} (already processed or binary)")
+            return True
+        return False
+
+    def _update_index_with_retries(
+        self, path: Path, content: str, max_attempts: int = 3
+    ) -> bool:
+        """Update index for a file with retries."""
+        canonical_path = str(path.resolve())
+
+        # Delete old versions
+        self.indexer.delete_documents({"source": canonical_path})
+        logger.debug(f"Cleared old versions for: {canonical_path}")
+
+        # Try indexing with verification
+        for attempt in range(max_attempts):
+            logger.info(f"Indexing attempt {attempt + 1} for {path}")
+            self.indexer.index_file(path)
+
+            if self.indexer.verify_document(path, content=content):
+                logger.info(f"Successfully verified index update for {path}")
+                return True
+
+            if attempt < max_attempts - 1:
+                logger.warning(
+                    f"Verification failed, retrying... ({attempt + 1}/{max_attempts})"
+                )
+                time.sleep(0.5)
+
+        logger.error(
+            f"Failed to verify index update after {max_attempts} attempts for {path}"
+        )
+        return False
+
+    def _process_single_update(self, path: Path, processed_paths: set[str]) -> None:
+        """Process a single file update.
+
+        Args:
+            path: Path to the file to process
+            processed_paths: Set of already processed canonical paths
+        """
+        """Process a single file update."""
+        if self._should_skip_file(path, processed_paths):
+            return
+
+        # Wait to ensure file is fully written
+        time.sleep(0.2)
+
+        try:
+            if path.exists():
+                # Read current content for verification
+                current_content = path.read_text()
+
+                # Update index
+                if self._update_index_with_retries(path, current_content):
+                    processed_paths.add(str(path.resolve()))
+
+        except Exception as e:
+            logger.error(f"Error processing update for {path}: {e}", exc_info=True)
+
     def _process_updates(self) -> None:
         """Process all pending updates."""
         if not self._pending_updates:
@@ -152,99 +220,9 @@ class IndexEventHandler(FileSystemEventHandler):
         logger.debug(f"Sorted updates: {[str(p) for p in updates]}")
 
         # Process only the latest version of each file
-        processed_paths = set()
+        processed_paths: set[str] = set()
         for path in updates:
-            try:
-                canonical_path = str(path.resolve())
-                logger.debug(f"Processing update for {canonical_path}")
-
-                # Skip if already processed or if it's a binary file
-                if (
-                    canonical_path in processed_paths
-                    or not path.is_file()
-                    or path.suffix in {".sqlite3", ".db", ".bin", ".pyc"}
-                ):
-                    logger.debug(
-                        f"Skipping {canonical_path} (already processed or binary)"
-                    )
-                    continue
-
-                # Wait to ensure file is fully written
-                time.sleep(0.2)
-
-                # Get current content to ensure we have the latest version
-                if path.exists():
-                    try:
-                        # Read current content for verification
-                        current_content = path.read_text()
-
-                        # Clear old versions and index new version atomically
-                        try:
-                            # Delete old versions
-                            self.indexer.delete_documents({"source": canonical_path})
-                            logger.debug(f"Cleared old versions for: {canonical_path}")
-
-                            # Index the new version immediately to maintain atomicity
-                            max_attempts = 3
-                            for attempt in range(max_attempts):
-                                logger.info(
-                                    f"Indexing attempt {attempt + 1} for {path}"
-                                )
-                                self.indexer.index_file(path)
-
-                                # Verify the update
-                                if self.indexer.verify_document(
-                                    path, content=current_content
-                                ):
-                                    processed_paths.add(canonical_path)
-                                    logger.info(
-                                        f"Successfully verified index update for {path}"
-                                    )
-                                    break
-                                elif attempt < max_attempts - 1:
-                                    logger.warning(
-                                        f"Verification failed, retrying... ({attempt + 1}/{max_attempts})"
-                                    )
-                                    time.sleep(0.5)  # Wait before retry
-                                else:
-                                    logger.error(
-                                        f"Failed to verify index update after {max_attempts} attempts for {path}"
-                                    )
-                        except Exception as e:
-                            logger.error(
-                                f"Error updating index for {path}: {e}", exc_info=True
-                            )
-                        for attempt in range(max_attempts):
-                            logger.info(f"Indexing attempt {attempt + 1} for {path}")
-                            self.indexer.index_file(path)
-
-                            # Verify the update
-                            if self.indexer.verify_document(
-                                path, content=current_content
-                            ):
-                                processed_paths.add(canonical_path)
-                                logger.info(
-                                    f"Successfully verified index update for {path}"
-                                )
-                                break
-                            elif attempt < max_attempts - 1:
-                                logger.warning(
-                                    f"Verification failed, retrying... ({attempt + 1}/{max_attempts})"
-                                )
-                                time.sleep(0.5)  # Wait before retry
-                            else:
-                                logger.error(
-                                    f"Failed to verify index update after {max_attempts} attempts for {path}"
-                                )
-
-                    except Exception as e:
-                        logger.error(
-                            f"Error updating index for {path}: {e}", exc_info=True
-                        )
-                        continue
-
-            except Exception as e:
-                logger.error(f"Error processing update for {path}: {e}", exc_info=True)
+            self._process_single_update(path, processed_paths)
 
         self._pending_updates.clear()
         self._last_update = time.time()
@@ -279,25 +257,43 @@ class FileWatcher:
 
     def start(self) -> None:
         """Start watching for file changes."""
+        # Reset collection once before starting
+        self.indexer.reset_collection()
+        logger.debug("Reset collection before starting watcher")
+
         # First index existing files
         for path in self.paths:
             if not path.exists():
                 logger.warning(f"Watch path does not exist: {path}")
                 continue
-            # Reset collection before starting
-            self.indexer.reset_collection()
-            logger.debug("Reset collection before starting watcher")
 
             # Index existing files
-            self.indexer.index_directory(path, self.event_handler.pattern)
-            logger.debug(f"Indexed existing files in {path}")
-            # Set up watching
-            self.observer.schedule(self.event_handler, str(path), recursive=True)
+            try:
+                self.indexer.index_directory(path, self.event_handler.pattern)
+                logger.debug(f"Indexed existing files in {path}")
+            except Exception as e:
+                logger.error(f"Error indexing directory {path}: {e}", exc_info=True)
 
-        self.observer.start()
-        # Wait a bit to ensure the observer is ready
-        time.sleep(0.2)
-        logger.info(f"Started watching paths: {', '.join(str(p) for p in self.paths)}")
+            # Set up watching
+            try:
+                self.observer.schedule(self.event_handler, str(path), recursive=True)
+                logger.debug(f"Scheduled observer for {path}")
+            except Exception as e:
+                logger.error(
+                    f"Error scheduling observer for {path}: {e}", exc_info=True
+                )
+
+        # Start the observer
+        try:
+            self.observer.start()
+            # Wait a bit to ensure the observer is ready
+            time.sleep(0.5)  # Increased wait time for better stability
+            logger.info(
+                f"Started watching paths: {', '.join(str(p) for p in self.paths)}"
+            )
+        except Exception as e:
+            logger.error(f"Error starting observer: {e}", exc_info=True)
+            raise
 
     def stop(self) -> None:
         """Stop watching for file changes."""

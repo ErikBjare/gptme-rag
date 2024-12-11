@@ -72,7 +72,7 @@ class DocumentProcessor:
                 }
                 return
 
-            # Process in chunks
+            # Process text in chunks based on tokens
             chunk_start = 0
             chunk_count = 0
 
@@ -80,34 +80,37 @@ class DocumentProcessor:
                 # Calculate chunk end
                 chunk_end = min(chunk_start + self.chunk_size, len(tokens))
 
-                # Decode chunk
+                # Get chunk tokens and decode
                 chunk_tokens = tokens[chunk_start:chunk_end]
                 chunk_text = self.encoding.decode(chunk_tokens)
 
                 # Create chunk metadata
-                chunk_metadata = {
-                    **(metadata or {}),
-                    "chunk_index": chunk_count,
-                    "token_count": len(chunk_tokens),
-                    "total_chunks": total_chunks,
-                    "chunk_start": chunk_start,
-                    "chunk_end": chunk_end,
-                }
-
                 yield {
                     "text": chunk_text,
-                    "metadata": chunk_metadata,
+                    "metadata": {
+                        **(metadata or {}),
+                        "chunk_index": chunk_count,
+                        "token_count": len(chunk_tokens),
+                        "total_chunks": total_chunks,
+                        "chunk_start": chunk_start,
+                        "chunk_end": chunk_end,
+                        "is_chunk": True,
+                    },
                 }
 
-                # Move to next chunk
-                chunk_start = chunk_end - self.chunk_overlap
+                # Calculate next chunk start
+                if chunk_end == len(tokens):
+                    # If we've reached the end, we're done
+                    break
+
+                # Move forward by at least one token, considering overlap
+                next_start = chunk_start + max(1, self.chunk_size - self.chunk_overlap)
+                chunk_start = min(next_start, len(tokens) - 1)
                 chunk_count += 1
 
-                # Check stopping conditions
+                # Check max chunks limit
                 if self.max_chunks and chunk_count >= self.max_chunks:
-                    return
-                if len(tokens) - chunk_start <= self.chunk_overlap:
-                    return
+                    break
 
         except Exception as e:
             logger.error(f"Error processing text: {e}")

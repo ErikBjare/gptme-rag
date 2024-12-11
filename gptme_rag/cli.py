@@ -35,9 +35,7 @@ def cli(verbose: bool):
 
 
 @cli.command()
-@click.argument(
-    "directory", type=click.Path(exists=True, file_okay=False, path_type=Path)
-)
+@click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--pattern", "-p", default="**/*.*", help="Glob pattern for files to index"
 )
@@ -47,16 +45,29 @@ def cli(verbose: bool):
     default=default_persist_dir,
     help="Directory to persist the index",
 )
-def index(directory: Path, pattern: str, persist_dir: Path):
-    """Index documents in a directory."""
+def index(paths: list[Path], pattern: str, persist_dir: Path):
+    """Index documents in one or more directories."""
+    if not paths:
+        console.print("❌ No paths provided", style="red")
+        return
+
     try:
         indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
-        console.print(f"Indexing files in {directory} with pattern {pattern}")
+        total_indexed = 0
 
-        # Index the files
-        n_indexed = indexer.index_directory(directory, pattern)
+        for path in paths:
+            if path.is_file():
+                console.print(f"Indexing file: {path}")
+                n_indexed = indexer.index_file(path)
+                if n_indexed is not None:
+                    total_indexed += n_indexed
+            else:
+                console.print(f"Indexing files in {path} with pattern {pattern}")
+                n_indexed = indexer.index_directory(path, pattern)
+                if n_indexed is not None:
+                    total_indexed += n_indexed
 
-        console.print(f"✅ Successfully indexed {n_indexed} files", style="green")
+        console.print(f"✅ Successfully indexed {total_indexed} files", style="green")
     except Exception as e:
         console.print(f"❌ Error indexing directory: {e}", style="red")
 
@@ -74,6 +85,12 @@ def index(directory: Path, pattern: str, persist_dir: Path):
 @click.option("--max-tokens", default=4000, help="Maximum tokens in context window")
 @click.option("--show-context", is_flag=True, help="Show the full context content")
 @click.option("--raw", is_flag=True, help="Skip syntax highlighting")
+@click.option("--explain", is_flag=True, help="Show scoring explanations")
+@click.option(
+    "--weights",
+    type=click.STRING,
+    help="Custom scoring weights as JSON string, e.g. '{\"recency_boost\": 0.3}'",
+)
 def search(
     query: str,
     paths: list[Path],
@@ -82,21 +99,46 @@ def search(
     max_tokens: int,
     show_context: bool,
     raw: bool,
+    explain: bool,
+    weights: str | None,
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
 
     # Hide ChromaDB output during initialization and search
     with console.status("Initializing..."):
+        # Parse custom weights if provided
+        scoring_weights = None
+        if weights:
+            try:
+                import json
+
+                scoring_weights = json.loads(weights)
+            except json.JSONDecodeError as e:
+                console.print(f"❌ Invalid weights JSON: {e}", style="red")
+                return
+            except Exception as e:
+                console.print(f"❌ Error parsing weights: {e}", style="red")
+                return
+
         # Temporarily redirect stdout to suppress ChromaDB output
         stdout = sys.stdout
         sys.stdout = open(os.devnull, "w")
         try:
-            indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
-            assembler = ContextAssembler(max_tokens=max_tokens)
-            documents, distances = indexer.search(
-                query, n_results=n_results, paths=paths
+            indexer = Indexer(
+                persist_directory=persist_dir,
+                enable_persist=True,
+                scoring_weights=scoring_weights,
             )
+            assembler = ContextAssembler(max_tokens=max_tokens)
+            if explain:
+                documents, distances, explanations = indexer.search(
+                    query, n_results=n_results, paths=paths, explain=True
+                )
+            else:
+                documents, distances, _ = indexer.search(
+                    query, n_results=n_results, paths=paths
+                )
         finally:
             sys.stdout.close()
             sys.stdout = stdout
@@ -128,12 +170,41 @@ def search(
     for i, doc in enumerate(documents):
         source = doc.metadata.get("source", "unknown")
         distance = distances[i]
-        relevance = 1 - distance  # Convert distance to similarity score
 
-        # Show document header with relevance score
-        console.print(
-            f"\n[cyan]{i+1}. {source}[/cyan] [yellow](relevance: {relevance:.2f})[/yellow]"
-        )
+        # Show document header
+        console.print(f"\n[cyan]{i+1}. {source}[/cyan]")
+
+        # Show scoring explanation if requested
+        if explain and explanations:  # Make sure explanations is not None
+            explanation = explanations[i]
+            console.print("\n[bold]Scoring Breakdown:[/bold]")
+
+            # Show individual score components
+            scores = explanation.get("scores", {})
+            for factor, score in scores.items():
+                # Color code the scores
+                if score > 0:
+                    score_color = "green"
+                    sign = "+"
+                elif score < 0:
+                    score_color = "red"
+                    sign = ""
+                else:
+                    score_color = "yellow"
+                    sign = " "
+
+                # Print score and explanation
+                console.print(
+                    f"  {factor:15} [{score_color}]{sign}{score:>6.3f}[/{score_color}] | {explanation['explanations'][factor]}"
+                )
+
+            # Show total score
+            total = explanation["total_score"]
+            console.print(f"\n  {'Total':15} [bold blue]{total:>7.3f}[/bold blue]")
+        else:
+            # Just show the base relevance score
+            relevance = 1 - distance
+            console.print(f"[yellow](relevance: {relevance:.2f})[/yellow]")
 
         # Use file extension as lexer (strip the dot)
         lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
@@ -141,7 +212,8 @@ def search(
         # Extract preview content (first ~200 chars)
         preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
 
-        # Display with syntax highlighting
+        # Display preview with syntax highlighting
+        console.print("\n[bold]Preview:[/bold]")
         syntax = Syntax(
             preview,
             lexer,

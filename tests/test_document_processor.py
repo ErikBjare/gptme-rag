@@ -15,6 +15,14 @@ def test_process_text_basic():
 
     chunks = list(processor.process_text(text))
 
+    # Print debug info
+    print(f"\nTotal tokens in text: {len(processor.encoding.encode(text))}")
+    for i, chunk in enumerate(chunks):
+        print(f"\nChunk {i}:")
+        print(f"Token count: {chunk['metadata']['token_count']}")
+        print(f"Content length: {len(chunk['text'])}")
+        print(f"First 50 chars: {chunk['text'][:50]}")
+
     assert len(chunks) > 1  # Should split into multiple chunks
     assert all(isinstance(c["text"], str) for c in chunks)
     assert all(isinstance(c["metadata"], dict) for c in chunks)
@@ -93,6 +101,23 @@ def test_token_estimation():
 
     chunks = processor.estimate_chunks(token_count)
     assert chunks > 0
+
+
+def test_content_size():
+    """Test actual content size in tokens for test data."""
+    processor = DocumentProcessor()
+    content = "\n\n".join(
+        [
+            f"This is paragraph {i} with some content that should be indexed."
+            for i in range(10)
+        ]
+    )
+    tokens = processor.encoding.encode(content)
+    print(f"Total tokens: {len(tokens)}")
+    print(f"Content length: {len(content)}")
+    for i, para in enumerate(content.split("\n\n")):
+        para_tokens = processor.encoding.encode(para)
+        print(f"Paragraph {i}: {len(para_tokens)} tokens, {len(para)} chars")
 
 
 def test_optimal_chunk_size():

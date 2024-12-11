@@ -26,7 +26,7 @@ def main():
         indexer.index_directory(docs_dir, glob_pattern="**/*.md")
 
         # Search
-        documents, distances = indexer.search(query, n_results=3)
+        documents, distances, _ = indexer.search(query, n_results=3)
 
         # Display results
         console.print(f"\nResults for: [cyan]{query}[/cyan]\n")
