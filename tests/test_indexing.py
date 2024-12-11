@@ -67,10 +67,22 @@ def test_indexer_add_document(temp_dir, test_docs):
 
 
 def test_indexer_add_documents(temp_dir, test_docs):
-    indexer = Indexer(persist_directory=temp_dir)
+    # Create indexer with unique collection name
+    indexer = Indexer(
+        persist_directory=temp_dir,
+        collection_name="test_add_documents",
+        enable_persist=True,
+    )
+
+    # Reset collection to ensure clean state
+    indexer.reset_collection()
 
     # Add multiple documents
     indexer.add_documents(test_docs)
+
+    # Verify documents were added
+    results = indexer.collection.get()
+    assert len(results["documents"]) == len(test_docs), "Not all documents were added"
 
     # Search for programming-related content
     prog_results, prog_distances, _ = indexer.search("programming")
@@ -80,9 +92,11 @@ def test_indexer_add_documents(temp_dir, test_docs):
 
     # Search for ML-related content
     ml_results, ml_distances, _ = indexer.search("machine learning")
-    assert len(ml_results) > 0
-    assert any("machine learning" in doc.content.lower() for doc in ml_results)
-    assert len(ml_distances) > 0
+    assert len(ml_results) > 0, "No results found for 'machine learning'"
+    assert any(
+        "machine learning" in doc.content.lower() for doc in ml_results
+    ), f"Expected 'machine learning' in results: {[doc.content for doc in ml_results]}"
+    assert len(ml_distances) > 0, "No distances returned"
 
 
 def test_indexer_directory(temp_dir):

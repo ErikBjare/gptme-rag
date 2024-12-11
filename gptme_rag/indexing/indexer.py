@@ -475,6 +475,71 @@ class Indexer:
 
         return total_score, scores
 
+    def _group_and_score_results(
+        self,
+        results: dict,
+        query: str,
+        paths: list[Path] | None,
+        n_results: int,
+        explain: bool,
+    ) -> tuple[list[Document], list[float], list[dict]]:
+        """Group and score search results by source document."""
+        documents: list[Document] = []
+        distances: list[float] = []
+        explanations: list[dict] = []
+        seen_sources: set[str] = set()
+
+        # Extract distances from results
+        result_distances = results["distances"][0] if "distances" in results else []
+
+        # Process results in order, taking only first chunk from each source
+        for i, doc_id in enumerate(results["ids"][0]):
+            doc = Document(
+                content=results["documents"][0][i],
+                metadata=results["metadatas"][0][i],
+                doc_id=doc_id,
+            )
+
+            # Skip if doesn't match path filter
+            if paths and not self._matches_paths(doc, paths):
+                continue
+
+            # Get source ID and skip if we've seen it
+            source_id = doc_id.split("#chunk")[0]
+            if source_id in seen_sources:
+                continue
+            seen_sources.add(source_id)
+
+            # Add document to results
+            documents.append(doc)
+            distances.append(result_distances[i])
+            if explain:
+                score, score_breakdown = self.compute_relevance_score(
+                    doc, result_distances[i], query, debug=explain
+                )
+                explanations.append(
+                    self.explain_scoring(
+                        query, doc, result_distances[i], score_breakdown
+                    )
+                )
+
+            # Stop if we have enough results
+            if len(documents) >= n_results:
+                break
+
+        return documents, distances, explanations
+
+    def _matches_paths(self, doc: Document, paths: list[Path]) -> bool:
+        """Check if document matches any of the given paths."""
+        source = doc.metadata.get("source", "")
+        if not source:
+            return False
+        source_path = Path(source)
+        return any(
+            path.resolve() in source_path.parents or path.resolve() == source_path
+            for path in paths
+        )
+
     def search(
         self,
         query: str,
@@ -485,154 +550,91 @@ class Indexer:
         max_attempts: int = 3,
         explain: bool = False,
     ) -> tuple[list[Document], list[float], list[dict[str, Any]] | None]:
-        # Debug collection state
-        self.debug_collection()
-        """Search for documents similar to the query.
-
-        Args:
-            query: Search query
-            paths: List of paths to filter results by
-            n_results: Number of results to return
-            where: Optional filter conditions
-            max_attempts: Maximum number of attempts to get enough results
-            explain: Whether to include scoring explanations
-
-        Returns:
-            If explain=False: tuple[list[Document], list[float]]
-            If explain=True: tuple[list[Document], list[float], list[dict]]
-        """
-        documents: list[Document] = []
-        distances: list[float] = []
-        explanations: list[dict[str, Any]] = [] if explain else []
-        current_attempt = 0
+        """Search for documents similar to the query."""
+        # Get more results than needed to allow for filtering
         query_n_results = n_results * 3 if group_chunks else n_results
 
-        while len(documents) < n_results and current_attempt < max_attempts:
-            # Increase n_results on subsequent attempts
-            if current_attempt > 0:
-                query_n_results *= 2
+        # Query the collection
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=query_n_results,
+            where=where,
+        )
 
-            # Get more results if we're going to filter by path
-            if paths:
-                query_n_results *= len(paths) * 2
+        if not results["ids"][0]:
+            return [], [], [] if explain else None
 
-            # Query without path filtering
-            logger.debug(f"Querying with n_results={query_n_results}")
+        # Process results
+        if group_chunks:
+            # Group by source document
+            docs_by_source: dict[str, tuple[Document, float]] = {}
+            for i, doc_id in enumerate(results["ids"][0]):
+                source_id = doc_id.split("#chunk")[0]
+                if source_id not in docs_by_source:
+                    doc = Document(
+                        content=results["documents"][0][i],
+                        metadata=results["metadatas"][0][i],
+                        doc_id=doc_id,
+                    )
+                    if not paths or self._matches_paths(doc, paths):
+                        docs_by_source[source_id] = (doc, results["distances"][0][i])
 
-            # Query the collection
-            results = self.collection.query(
-                query_texts=[query], n_results=query_n_results, where=where
+            # Take top n results
+            sorted_docs = sorted(docs_by_source.values(), key=lambda x: x[1])[
+                :n_results
+            ]
+            documents, distances = zip(*sorted_docs) if sorted_docs else ([], [])
+        else:
+            # Process individual chunks
+            documents, distances, _ = self._process_individual_chunks(
+                results, paths, n_results, explain
             )
 
-            if not results["ids"][0]:
+        # Add explanations if requested
+        if explain:
+            explanations = []
+            for doc, distance in zip(documents, distances):
+                score, score_breakdown = self.compute_relevance_score(
+                    doc, distance, query, debug=explain
+                )
+                explanations.append(
+                    self.explain_scoring(query, doc, distance, score_breakdown)
+                )
+            return list(documents), list(distances), explanations
+
+        return list(documents), list(distances), None
+
+    def _process_individual_chunks(
+        self,
+        results: dict,
+        paths: list[Path] | None,
+        n_results: int,
+        explain: bool,
+    ) -> tuple[list[Document], list[float], list[dict]]:
+        """Process search results as individual chunks."""
+        documents: list[Document] = []
+        distances: list[float] = []
+        explanations: list[dict] = []
+        seen_ids = set()
+
+        result_distances = results["distances"][0] if "distances" in results else []
+
+        for i, doc_id in enumerate(results["ids"][0]):
+            if len(documents) >= n_results or doc_id in seen_ids:
                 break
 
-            # Debug the raw results
-            print("\nRaw query results:")
-            print(f"IDs: {results['ids']}")
-            print(f"Documents: {results['documents']}")
-            print(f"Metadatas: {results['metadatas']}")
-            print(f"Distances: {results['distances']}")
+            doc = Document(
+                content=results["documents"][0][i],
+                metadata=results["metadatas"][0][i],
+                doc_id=doc_id,
+            )
 
-            result_distances = results["distances"][0] if "distances" in results else []
+            if paths and not self._matches_paths(doc, paths):
+                continue
 
-            # Group chunks by source document if requested
-            if group_chunks:
-                doc_groups: dict[str, list[tuple[Document, float]]] = {}
-
-                # First pass: collect all chunks for each document
-                for i, doc_id in enumerate(results["ids"][0]):
-                    doc = Document(
-                        content=results["documents"][0][i],
-                        metadata=results["metadatas"][0][i],
-                        doc_id=doc_id,
-                    )
-
-                    # Filter by path if paths specified
-                    if paths:
-                        source = doc.metadata.get("source", "")
-                        if not source:
-                            continue
-                        source_path = Path(source)
-                        # Check if document is in any of the specified paths
-                        if not any(
-                            path.resolve() in source_path.parents
-                            or path.resolve() == source_path
-                            for path in paths
-                        ):
-                            continue
-
-                    # Get source document ID (remove chunk suffix if present)
-                    source_id = doc_id.split("#chunk")[0]
-
-                    if source_id not in doc_groups:
-                        doc_groups[source_id] = []
-                    doc_groups[source_id].append((doc, result_distances[i]))
-
-                logger.debug(f"Found {len(doc_groups)} documents after filtering")
-
-                # Take the best chunk from each document
-                for source_docs in list(doc_groups.values()):
-                    if len(documents) >= n_results:
-                        break
-
-                    # Enhanced ranking using multiple signals
-
-                    # Sort by enhanced relevance score and collect explanations if requested
-                    scored_docs = []
-                    for doc, distance in source_docs:
-                        score, score_breakdown = self.compute_relevance_score(
-                            doc, distance, query, debug=explain
-                        )
-                        if explain:
-                            explanation = self.explain_scoring(
-                                query, doc, distance, score_breakdown
-                            )
-                            scored_docs.append((doc, distance, score, explanation))
-                        else:
-                            scored_docs.append((doc, distance, score, {}))
-
-                    # Sort by score and take the best
-                    best = max(scored_docs, key=lambda x: x[2])
-                    best_doc, best_distance = best[0], best[1]
-                    if explain:
-                        explanations.append(best[3])
-
-                    documents.append(best_doc)
-                    distances.append(best_distance)
-
-            current_attempt += 1
-
-        # Return results with explanations if requested
-        if group_chunks:
-            # Results already processed in the group_chunks block
-            pass
-        else:
-            # Return individual chunks, limited to n_results
-            documents = []
-            distances = []
-            seen_ids = set()
-
-            for i, doc_id in enumerate(results["ids"][0]):
-                if len(documents) >= n_results:
-                    break
-
-                # For non-grouped results, use the full doc_id
-                if doc_id not in seen_ids:
-                    doc = Document(
-                        content=results["documents"][0][i],
-                        metadata=results["metadatas"][0][i],
-                        doc_id=doc_id,
-                    )
-                    documents.append(doc)
-                    distances.append(result_distances[i])
-                    seen_ids.add(doc_id)
-
-        # Ensure we don't return more than n_results
-        documents = documents[:n_results]
-        distances = distances[:n_results]
-        if explanations:
-            explanations = explanations[:n_results]
+            documents.append(doc)
+            distances.append(result_distances[i])
+            seen_ids.add(doc_id)
 
         return documents, distances, explanations
 
