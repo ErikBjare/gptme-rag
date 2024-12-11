@@ -188,7 +188,7 @@ class Indexer:
             batch = documents[processed : processed + batch_size]
             self._add_documents(batch)
             processed += len(batch)
-            yield processed
+            yield len(batch)
 
     def _add_documents(self, documents: list[Document]) -> None:
         try:
