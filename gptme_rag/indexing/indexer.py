@@ -463,60 +463,6 @@ class Indexer:
 
         return total_score, scores
 
-    def _group_and_score_results(
-        self,
-        results: dict,
-        query: str,
-        paths: list[Path] | None,
-        n_results: int,
-        explain: bool,
-    ) -> tuple[list[Document], list[float], list[dict]]:
-        """Group and score search results by source document."""
-        documents: list[Document] = []
-        distances: list[float] = []
-        explanations: list[dict] = []
-        seen_sources: set[str] = set()
-
-        # Extract distances from results
-        result_distances = results["distances"][0] if "distances" in results else []
-
-        # Process results in order, taking only first chunk from each source
-        for i, doc_id in enumerate(results["ids"][0]):
-            doc = Document(
-                content=results["documents"][0][i],
-                metadata=results["metadatas"][0][i],
-                doc_id=doc_id,
-            )
-
-            # Skip if doesn't match path filter
-            if paths and not self._matches_paths(doc, paths):
-                continue
-
-            # Get source ID and skip if we've seen it
-            source_id = doc_id.split("#chunk")[0]
-            if source_id in seen_sources:
-                continue
-            seen_sources.add(source_id)
-
-            # Add document to results
-            documents.append(doc)
-            distances.append(result_distances[i])
-            if explain:
-                score, score_breakdown = self.compute_relevance_score(
-                    doc, result_distances[i], query, debug=explain
-                )
-                explanations.append(
-                    self.explain_scoring(
-                        query, doc, result_distances[i], score_breakdown
-                    )
-                )
-
-            # Stop if we have enough results
-            if len(documents) >= n_results:
-                break
-
-        return documents, distances, explanations
-
     def _matches_paths(self, doc: Document, paths: list[Path]) -> bool:
         """Check if document matches any of the given paths."""
         source = doc.metadata.get("source", "")
