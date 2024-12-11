@@ -905,3 +905,11 @@ class Indexer:
             self.add_documents(documents)
             return len(documents)
         return 0
+
+    def get_all_documents(self) -> list[Document]:
+        """Get all documents from the index.
+
+        Returns:
+            List of all documents in the index, including all chunks.
+        """
+        return self.list_documents(group_by_source=False)
