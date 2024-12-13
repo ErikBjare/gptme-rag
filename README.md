@@ -53,7 +53,7 @@ RAG systems improve AI responses by retrieving and incorporating relevant inform
 pipx install gptme-rag  # or: pip install gptme-rag
 
 # Index your documents
-gptme-rag index ./docs --pattern "**/*.md"
+gptme-rag index **.md
 
 # Search
 gptme-rag search "What is the architecture of the system?"
@@ -72,10 +72,10 @@ poetry install
 
 ```bash
 # Index markdown files in a directory
-gptme-rag index /path/to/documents --pattern "**/*.md"
+gptme-rag index *.md
 
 # Index with custom persist directory
-gptme-rag index /path/to/documents --persist-dir ./index
+gptme-rag index *.md --persist-dir ./index
 ```
 
 ### Searching
