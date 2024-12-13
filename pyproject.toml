@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gptme-rag"
-version = "0.5.0"
+version = "0.5.1"
 description = "RAG implementation for gptme context management"
 authors = ["Bob <bob@gptme.org>"]
 readme = "README.md"
