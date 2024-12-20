@@ -92,6 +92,7 @@ class Indexer:
             self.persist_directory = Path(persist_directory).expanduser().resolve()
             self.persist_directory.mkdir(parents=True, exist_ok=True)
             logger.info(f"Using persist directory: {self.persist_directory}")
+
             settings.persist_directory = str(self.persist_directory)
             self.client = chromadb.PersistentClient(
                 path=str(self.persist_directory), settings=settings
@@ -516,6 +517,9 @@ class Indexer:
         """
         # Get all documents from collection
         results = self.collection.get()
+        logger.debug("ChromaDB returned %d documents", len(results["ids"]))
+        if results["ids"]:
+            logger.debug("First document metadata: %s", results["metadatas"][0])
 
         if not results["ids"]:
             return []
@@ -912,4 +916,8 @@ class Indexer:
         Returns:
             List of all documents in the index, including all chunks.
         """
-        return self.list_documents(group_by_source=False)
+        logger.debug("Getting all documents from index")
+        docs = self.list_documents(group_by_source=False)
+        for doc in docs:
+            logger.debug("Retrieved document with metadata: %s", doc.metadata)
+        return docs

@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -65,9 +66,21 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
         for doc in existing_docs:
             if "source" in doc.metadata:
                 abs_path = os.path.abspath(doc.metadata["source"])
-                mtime = doc.metadata.get("mtime", 0)
-                existing_files[abs_path] = mtime
-                logger.debug("Existing file: %s (mtime: %s)", abs_path, mtime)
+                last_modified = doc.metadata.get("last_modified")
+                if last_modified:
+                    try:
+                        # Parse ISO format timestamp to float
+                        existing_files[abs_path] = datetime.fromisoformat(
+                            last_modified
+                        ).timestamp()
+                    except ValueError:
+                        logger.warning(
+                            "Invalid last_modified format: %s", last_modified
+                        )
+                        existing_files[abs_path] = 0
+                else:
+                    existing_files[abs_path] = 0
+                # logger.debug("Existing file: %s", abs_path)  # Too spammy
 
         logger.debug("Loaded %d existing files from index", len(existing_files))
 
@@ -91,13 +104,15 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
                         abs_source = os.path.abspath(source)
                         doc.metadata["source"] = abs_source
                         current_mtime = os.path.getmtime(abs_source)
-                        doc.metadata["mtime"] = current_mtime
 
                         # Include if file is new or modified
                         if abs_source not in existing_files:
                             logger.debug("New file: %s", abs_source)
                             filtered_documents.append(doc)
-                        elif current_mtime > existing_files[abs_source]:
+                        # Round to microseconds (6 decimal places) for comparison
+                        elif round(current_mtime, 6) > round(
+                            existing_files[abs_source], 6
+                        ):
                             logger.debug(
                                 "Modified file: %s (current: %s, stored: %s)",
                                 abs_source,

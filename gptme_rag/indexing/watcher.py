@@ -3,6 +3,7 @@
 import logging
 import time
 from pathlib import Path
+from datetime import datetime
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -321,7 +322,9 @@ class IndexEventHandler(FileSystemEventHandler):
 
         # Sort updates by modification time to get latest versions
         updates = sorted(
-            existing_updates, key=lambda p: p.stat().st_mtime, reverse=True
+            existing_updates,
+            key=lambda p: datetime.fromtimestamp(p.stat().st_mtime),
+            reverse=True,
         )
         logger.debug(f"Sorted updates: {[str(p) for p in updates]}")
 
