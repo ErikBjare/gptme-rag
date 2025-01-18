@@ -26,7 +26,7 @@ default_persist_dir = Path.home() / ".cache" / "gptme" / "rag"
 
 
 @click.group()
-@click.option("--verbose/-v", is_flag=True, help="Enable verbose output")
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose output")
 def cli(verbose: bool):
     """RAG implementation for gptme context management."""
     handler = RichHandler()
