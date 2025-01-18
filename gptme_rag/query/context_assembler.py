@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 import tiktoken
 
 from ..indexing.document import Document
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,9 +43,10 @@ class ContextAssembler:
         Assemble a context window from documents, staying within token limit.
 
         Documents should be pre-sorted by relevance.
+        Duplicate documents will be filtered out and a warning will be logged.
         """
         total_tokens = 0
-        included_docs = []
+        included_docs: list[Document] = []
         context_parts = []
         truncated = False
 
@@ -63,6 +67,11 @@ class ContextAssembler:
         for doc in documents:
             formatted_doc = self._format_document(doc)
             doc_tokens = self._count_tokens(formatted_doc)
+
+            # check if document content is duplicate
+            if doc.content in [d.content for d in included_docs]:
+                logger.warning(f"Duplicate document found: {doc.metadata['source']}")
+                continue
 
             if total_tokens + doc_tokens > self.max_tokens:
                 truncated = True
