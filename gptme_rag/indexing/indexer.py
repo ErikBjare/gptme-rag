@@ -1,7 +1,9 @@
 import logging
+import os
 import subprocess
 import time
 from collections.abc import Generator
+from datetime import datetime
 from fnmatch import fnmatch as fnmatch_path
 from logging import Filter
 from pathlib import Path
@@ -176,7 +178,22 @@ class Indexer:
             documents: List of documents to add
             batch_size: Number of documents to process in each batch
         """
-        list(self.add_documents_progress(documents, batch_size=batch_size))
+        # Process documents in batches
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i : i + batch_size]
+            self._add_documents(batch)
+
+            # Update stored timestamps after successful indexing
+            for doc in batch:
+                if "source" in doc.metadata:
+                    abs_path = str(Path(doc.metadata["source"]).resolve())
+                    current_mtime = int(os.path.getmtime(abs_path))
+                    doc.metadata["last_modified"] = current_mtime
+                    # Update the document in the collection
+                    self.collection.update(
+                        ids=[doc.doc_id],
+                        metadatas=[doc.metadata],
+                    )
 
     def add_documents_progress(
         self, documents: list[Document], batch_size: int = 10
@@ -200,6 +217,14 @@ class Indexer:
             for doc in documents:
                 doc = self._generate_doc_id(doc)
                 assert doc.doc_id is not None
+
+                # Update timestamp in metadata to current time
+                if "source" in doc.metadata:
+                    abs_path = str(Path(doc.metadata["source"]).resolve())
+                    current_mtime = os.path.getmtime(abs_path)
+                    doc.metadata["last_modified"] = self._normalize_timestamp(
+                        current_mtime
+                    )
 
                 contents.append(doc.content)
                 metadatas.append(doc.metadata)
@@ -869,14 +894,54 @@ class Indexer:
 
         return valid_files
 
+    def _normalize_timestamp(self, timestamp: str | float | int | None) -> str:
+        """Normalize timestamp to ISO format string."""
+        if timestamp is None:
+            return datetime.fromtimestamp(0).isoformat()
+        try:
+            if isinstance(timestamp, int | float):
+                return datetime.fromtimestamp(float(timestamp)).isoformat()
+            # If it's already an ISO string, validate and return
+            if isinstance(timestamp, str):
+                datetime.fromisoformat(timestamp)  # Validate format
+                return timestamp
+            raise ValueError(f"Unsupported timestamp type: {type(timestamp)}")
+        except (ValueError, TypeError) as e:
+            logger.warning("Invalid timestamp format: %s (%s)", timestamp, e)
+            return datetime.fromtimestamp(0).isoformat()
+
+    def _compare_timestamps(self, stored: str, current: float) -> bool:
+        """Compare stored ISO timestamp with current Unix timestamp.
+
+        Returns True if current is newer than stored."""
+        try:
+            stored_ts = datetime.fromisoformat(stored).timestamp()
+            # Round to seconds for comparison
+            return int(current) > int(stored_ts)
+        except (ValueError, TypeError) as e:
+            logger.warning("Error comparing timestamps: %s", e)
+            return True  # If we can't compare, assume modified
+
+    def _get_stored_timestamps(self) -> dict[str, str]:
+        """Get stored timestamps for all indexed files."""
+        stored = {}
+        for doc in self.get_all_documents():
+            if "source" in doc.metadata:
+                abs_path = str(Path(doc.metadata["source"]).resolve())
+                timestamp = self._normalize_timestamp(doc.metadata.get("last_modified"))
+                stored[abs_path] = timestamp
+                logger.debug("Stored timestamp for %s: %s", abs_path, timestamp)
+        return stored
+
     def collect_documents(
-        self, path: Path, glob_pattern: str = "**/*.*"
+        self, path: Path, glob_pattern: str = "**/*.*", check_modified: bool = True
     ) -> list[Document]:
         """Collect documents from a file or directory without processing them.
 
         Args:
             path: Path to collect documents from
             glob_pattern: Pattern to match files (only used for directories)
+            check_modified: Whether to check for modifications (skip unchanged files)
 
         Returns:
             List of documents ready for processing
@@ -888,8 +953,33 @@ class Indexer:
             logger.debug(f"No valid files found in {path}")
             return documents
 
+        if check_modified:
+            stored_timestamps = self._get_stored_timestamps()
+
         # Process files in order (least deep first)
         for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
+            abs_path = str(file_path.resolve())
+
+            if check_modified:
+                current_mtime = os.path.getmtime(file_path)
+                stored_timestamp = stored_timestamps.get(abs_path)
+
+                if stored_timestamp and not self._compare_timestamps(
+                    stored_timestamp, current_mtime
+                ):
+                    logger.debug("Skipping unchanged file: %s", abs_path)
+                    continue
+
+                if not stored_timestamp:
+                    logger.debug("New file: %s", abs_path)
+                else:
+                    logger.debug(
+                        "Modified file: %s (current: %s, stored: %s)",
+                        abs_path,
+                        self._normalize_timestamp(current_mtime),
+                        stored_timestamp,
+                    )
+
             logger.debug(f"Processing {file_path}")
             documents.extend(Document.from_file(file_path, processor=self.processor))
 
@@ -918,6 +1008,4 @@ class Indexer:
         """
         logger.debug("Getting all documents from index")
         docs = self.list_documents(group_by_source=False)
-        for doc in docs:
-            logger.debug("Retrieved document with metadata: %s", doc.metadata)
         return docs

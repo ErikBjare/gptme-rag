@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 import click
@@ -58,33 +57,7 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
     try:
         indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
 
-        # Get existing files and their metadata from the index, using absolute paths
-        existing_docs = indexer.get_all_documents()
-        logger.debug("Found %d existing documents in index", len(existing_docs))
-
-        existing_files = {}
-        for doc in existing_docs:
-            if "source" in doc.metadata:
-                abs_path = os.path.abspath(doc.metadata["source"])
-                last_modified = doc.metadata.get("last_modified")
-                if last_modified:
-                    try:
-                        # Parse ISO format timestamp to float
-                        existing_files[abs_path] = datetime.fromisoformat(
-                            last_modified
-                        ).timestamp()
-                    except ValueError:
-                        logger.warning(
-                            "Invalid last_modified format: %s", last_modified
-                        )
-                        existing_files[abs_path] = 0
-                else:
-                    existing_files[abs_path] = 0
-                # logger.debug("Existing file: %s", abs_path)  # Too spammy
-
-        logger.debug("Loaded %d existing files from index", len(existing_files))
-
-        # First, collect all documents and filter for new/modified
+        # Collect all documents (indexer handles modification checking)
         all_documents = []
         with console.status("Collecting documents...") as status:
             for path in paths:
@@ -93,47 +66,18 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
                 else:
                     status.update(f"Processing directory: {path}")
 
-                documents = indexer.collect_documents(path)
-
-                # Filter for new or modified documents
-                filtered_documents = []
-                for doc in documents:
-                    source = doc.metadata.get("source")
-                    if source:
-                        # Resolve to absolute path for consistent comparison
-                        abs_source = os.path.abspath(source)
-                        doc.metadata["source"] = abs_source
-                        current_mtime = os.path.getmtime(abs_source)
-
-                        # Include if file is new or modified
-                        if abs_source not in existing_files:
-                            logger.debug("New file: %s", abs_source)
-                            filtered_documents.append(doc)
-                        # Round to microseconds (6 decimal places) for comparison
-                        elif round(current_mtime, 6) > round(
-                            existing_files[abs_source], 6
-                        ):
-                            logger.debug(
-                                "Modified file: %s (current: %s, stored: %s)",
-                                abs_source,
-                                current_mtime,
-                                existing_files[abs_source],
-                            )
-                            filtered_documents.append(doc)
-                        else:
-                            logger.debug("Unchanged file: %s", abs_source)
-
-                all_documents.extend(filtered_documents)
+                documents = indexer.collect_documents(path, check_modified=True)
+                all_documents.extend(documents)
 
         if not all_documents:
             console.print("No new or modified documents to index", style="yellow")
             return
 
-        # Then process them with a progress bar
+        # Process with progress bar
         n_files = len(set(doc.metadata.get("source", "") for doc in all_documents))
         n_chunks = len(all_documents)
 
-        logger.info(f"Found {n_files} new/modified files to index ({n_chunks} chunks)")
+        logger.info(f"Processing {n_files} files ({n_chunks} chunks)")
 
         with tqdm(
             total=n_chunks,
