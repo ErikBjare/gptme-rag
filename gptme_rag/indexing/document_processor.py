@@ -84,6 +84,12 @@ class DocumentProcessor:
                 chunk_tokens = tokens[chunk_start:chunk_end]
                 chunk_text = self.encoding.decode(chunk_tokens)
 
+                # Log chunk info
+                logger.debug(
+                    f"Creating chunk {chunk_count} with {len(chunk_tokens)} tokens, "
+                    f"{len(chunk_text)} chars, {chunk_text[:50]}..."
+                )
+
                 # Create chunk metadata
                 yield {
                     "text": chunk_text,

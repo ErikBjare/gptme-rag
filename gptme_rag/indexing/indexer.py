@@ -14,6 +14,7 @@ from chromadb.config import Settings
 
 from .document import Document
 from .document_processor import DocumentProcessor
+from ..embeddings import ModernBERTEmbedding
 
 
 class ChromaDBFilter(Filter):
@@ -51,14 +52,18 @@ def get_client(settings: Settings | None = None) -> ClientAPI:
     return chromadb.Client(settings)
 
 
-def get_collection(client: ClientAPI, name: str) -> Collection:
+def get_collection(client: ClientAPI, name: str, embedding_function=None) -> Collection:
     """Get or create a collection with consistent ID."""
     try:
         # Try to get existing collection
-        return client.get_collection(name=name)
+        return client.get_collection(name=name, embedding_function=embedding_function)
     except ValueError:
         # Create if it doesn't exist
-        return client.create_collection(name=name, metadata={"hnsw:space": "cosine"})
+        return client.create_collection(
+            name=name,
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=embedding_function,
+        )
 
 
 class Indexer:
@@ -67,18 +72,53 @@ class Indexer:
     processor: DocumentProcessor
     is_persistent: bool = False
     persist_directory: Path | None
+    embedding_function: ModernBERTEmbedding | None
 
     def __init__(
         self,
         persist_directory: Path | None = None,
         collection_name: str = "default",
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
         enable_persist: bool = False,  # Default to False due to multi-threading issues
         scoring_weights: dict | None = None,
+        embedding_function: str = "modernbert",  # Options: "modernbert", "default"
+        device: str = "cpu",
+        force_recreate: bool = False,  # Force recreation of collection
     ):
-        """Initialize the indexer."""
+        """Initialize the indexer.
+
+        Args:
+            persist_directory: Directory to persist the index
+            collection_name: Name of the collection
+            chunk_size: Size of document chunks
+            chunk_overlap: Overlap between chunks
+            enable_persist: Whether to persist the index
+            scoring_weights: Custom weights for scoring
+            embedding_function: Which embedding function to use ("modernbert" or "default")
+            device: Device to run embeddings on ("cuda" or "cpu")
+        """
         self.collection_name = collection_name
+
+        # Set default chunk sizes based on model type
+        default_chunk_size = 1000
+        default_chunk_overlap = 200
+
+        # Initialize embedding function
+        if embedding_function == "modernbert":
+            self.embedding_function = ModernBERTEmbedding(device=device)
+            # Adjust defaults for msmarco model
+            if self.embedding_function.is_msmarco:
+                default_chunk_size = 512
+                default_chunk_overlap = 64
+        else:
+            self.embedding_function = None  # Use ChromaDB default
+
+        # Use provided values or defaults
+        self.chunk_size = chunk_size if chunk_size is not None else default_chunk_size
+        self.chunk_overlap = (
+            chunk_overlap if chunk_overlap is not None else default_chunk_overlap
+        )
 
         # Initialize settings
         settings = Settings(
@@ -101,13 +141,59 @@ class Indexer:
             self.persist_directory = None
             self.client = get_client(settings)
 
-        # Initialize collection
-        self.collection = get_collection(self.client, collection_name)
+        need_recreate = False
+        current_model = (
+            "modernbert"
+            if isinstance(self.embedding_function, ModernBERTEmbedding)
+            else "default"
+        )
 
-        # Initialize document processor
+        try:
+            # Try to get existing collection
+            self.collection = self.client.get_collection(
+                name=collection_name,
+                embedding_function=self.embedding_function,  # Important: Use current embedding function
+            )
+
+            # Check if we need to recreate
+            metadata = self.collection.metadata or {}
+            stored_model = metadata.get("embedding_model", "unknown")
+
+            if stored_model != current_model or force_recreate:
+                logger.info(
+                    f"Model mismatch (stored: {stored_model}, current: {current_model}) or force recreate"
+                )
+                need_recreate = True
+
+        except (ValueError, Exception) as e:
+            # Collection doesn't exist or other error
+            logger.debug(f"Collection access error: {e}")
+            need_recreate = True
+
+        if need_recreate:
+            # Delete if exists
+            try:
+                self.client.delete_collection(collection_name)
+            except ValueError:
+                pass
+
+            # Create new collection
+            metadata = {"hnsw:space": "cosine", "embedding_model": current_model}
+            logger.info(f"Creating new collection with {current_model} embeddings")
+            self.collection = self.client.create_collection(
+                name=collection_name,
+                metadata=metadata,
+                embedding_function=self.embedding_function,
+            )
+
+        # Initialize document processor with configured chunk sizes
+        logger.debug(
+            f"Using chunk size: {self.chunk_size}, overlap: {self.chunk_overlap}"
+        )
+
         self.processor = DocumentProcessor(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
         )
 
         # Initialize scoring weights with defaults
@@ -749,6 +835,9 @@ class Indexer:
             "config": {
                 "chunk_size": self.processor.chunk_size,
                 "chunk_overlap": self.processor.chunk_overlap,
+                "embedding_model": "ModernBERT"
+                if isinstance(self.embedding_function, ModernBERTEmbedding)
+                else "default",
             },
         }
 
@@ -891,7 +980,13 @@ class Indexer:
         # Process files in order (least deep first)
         for file_path in sorted(valid_files, key=lambda x: len(x.parts)):
             logger.debug(f"Processing {file_path}")
-            documents.extend(Document.from_file(file_path, processor=self.processor))
+            chunks = list(Document.from_file(file_path, processor=self.processor))
+            logger.debug(f"Created {len(chunks)} chunks from {file_path}")
+            for i, chunk in enumerate(chunks):
+                logger.debug(
+                    f"Chunk {i} (length: {len(chunk.content)} chars): {chunk.content[:100]}..."
+                )
+            documents.extend(chunks)
 
         return documents
 
