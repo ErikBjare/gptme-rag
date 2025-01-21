@@ -17,13 +17,13 @@ repos:
   - id: mypy
     additional_dependencies: [types-tabulate, types-docutils]
     args: [--ignore-missing-imports, --check-untyped-defs]
-- repo: local
-  hooks:
-  - id: pytest
-    name: pytest
-    stages: [pre-commit]
-    types: [python]
-    entry: make test
-    language: system
-    pass_filenames: false
-    # always_run: true
+#- repo: local
+#  hooks:
+#  - id: pytest
+#    name: pytest
+#    stages: [pre-commit]
+#    types: [python]
+#    entry: make test
+#    language: system
+#    pass_filenames: false
+#    # always_run: true

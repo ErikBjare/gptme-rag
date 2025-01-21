@@ -65,10 +65,11 @@ def test_context_assembly_token_limit():
     # Create assembler with very low token limit
     small_assembler = ContextAssembler(max_tokens=50)
 
-    # Create documents with known content
+    # Create documents with very long content
     long_docs = [
         Document(
-            content="A" * 100,  # Long content that should exceed token limit
+            content="A"
+            * 1000,  # Much longer content that will definitely exceed token limit
             metadata={"source": f"doc{i}.txt"},
             doc_id=str(i),
         )

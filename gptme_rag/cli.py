@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
@@ -14,6 +15,8 @@ from rich.syntax import Syntax
 from tqdm import tqdm
 
 from .benchmark import RagBenchmark
+from .embeddings import ModernBERTEmbedding
+from .indexing.document import Document
 from .indexing.indexer import Indexer
 from .indexing.watcher import FileWatcher
 from .query.context_assembler import ContextAssembler
@@ -23,6 +26,114 @@ logger = logging.getLogger(__name__)
 
 # TODO: change this to a more appropriate location
 default_persist_dir = Path.home() / ".cache" / "gptme" / "rag"
+
+
+class ChunkMerger:
+    @staticmethod
+    def find_best_overlap(text1: str, text2: str) -> int:
+        """Find the best overlap between the end of text1 and start of text2."""
+        max_overlap = min(len(text1), len(text2))
+        min_overlap = 20  # Minimum meaningful overlap
+
+        for size in range(max_overlap, min_overlap - 1, -1):
+            if text1[-size:] == text2[:size]:
+                return size
+        return 0
+
+    @staticmethod
+    def merge_chunks(chunks: list[Document]) -> str:
+        """Merge multiple chunks into coherent text, removing overlaps."""
+        if not chunks:
+            return ""
+        if len(chunks) == 1:
+            return chunks[0].content
+
+        # Sort chunks by index
+        sorted_chunks = sorted(chunks, key=lambda x: x.metadata.get("chunk_index", 0))
+
+        # Start with first chunk
+        merged_content = sorted_chunks[0].content
+
+        # Merge subsequent chunks, removing overlaps
+        for chunk in sorted_chunks[1:]:
+            overlap_size = ChunkMerger.find_best_overlap(merged_content, chunk.content)
+            if overlap_size > 0:
+                merged_content += chunk.content[overlap_size:]
+            else:
+                merged_content += "\n" + chunk.content
+
+        return merged_content
+
+    @staticmethod
+    def get_adjacent_chunks(doc: Document, indexer: Indexer) -> list[Document]:
+        """Get adjacent chunks for a document."""
+        if doc.doc_id is None:
+            return []
+        base_id = doc.doc_id.split("#chunk")[0]
+        chunk_index = int(doc.metadata.get("chunk_index", 0))
+        all_chunks = indexer.get_document_chunks(base_id)
+
+        chunks = [doc]
+        for chunk in all_chunks:
+            if chunk.metadata.get("chunk_index") in [chunk_index - 1, chunk_index + 1]:
+                chunks.append(chunk)
+
+        return sorted(chunks, key=lambda x: x.metadata.get("chunk_index", 0))
+
+
+class SearchOutputFormatter:
+    def __init__(self, console: Console, raw: bool = False):
+        self.console = console
+        self.raw = raw
+
+    def format_file(self, doc: Document, content: str) -> str:
+        """Format content as a file."""
+        source = doc.metadata.get("source", "unknown")
+        return f'<file path="{source}">\n{content}\n</file>'
+
+    def format_chunks(self, doc: Document, content: str) -> str:
+        """Format content as chunks."""
+        source = doc.metadata.get("source", "unknown")
+        return f'<chunks path="{source}">\n{content}\n</chunks>'
+
+    def _indent_content(self, content: str, indent: int = 0) -> str:
+        """Format content without extra indentation for XML blocks."""
+        return content
+
+    def print_content(self, content: str, doc: Document):
+        """Print content with optional syntax highlighting."""
+        lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
+        self.console.print(
+            content
+            if self.raw
+            else Syntax(content, lexer, theme="monokai", word_wrap=True)
+        )
+
+    def print_relevance(self, relevance: float):
+        """Print relevance score."""
+        self.console.print(f"\n[yellow]Relevance: {relevance:.2f}[/yellow]")
+
+    def print_summary_header(self):
+        """Print header for summary view."""
+        self.console.print("\n[bold]Most Relevant Documents:[/bold]")
+
+    def print_document_header(self, i: int, source: str):
+        """Print document header in summary view."""
+        self.console.print(f"\n[cyan]{i+1}. {source}[/cyan]")
+
+    def print_preview(self, doc: Document):
+        """Print document preview in summary view."""
+        preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
+        lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
+        self.console.print("\n[bold]Preview:[/bold]")
+        self.console.print(Syntax(preview, lexer, theme="monokai", word_wrap=True))
+
+    def print_context_info(self, context):
+        """Print context information."""
+        self.console.print("\n[bold]Full Context:[/bold]")
+        self.console.print(f"Total tokens: {context.total_tokens}")
+        self.console.print(f"Documents included: {len(context.documents)}")
+        self.console.print(f"Truncated: {context.truncated}")
 
 
 @click.group()
@@ -49,14 +160,67 @@ def cli(verbose: bool):
     default=default_persist_dir,
     help="Directory to persist the index",
 )
-def index(paths: list[Path], pattern: str, persist_dir: Path):
+@click.option(
+    "--embedding-function",
+    type=click.Choice(["modernbert", "default"]),
+    default="modernbert",
+    help="Embedding function to use (modernbert or default)",
+)
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    default="cpu",
+    help="Device to run embeddings on (defaults to cpu)",
+)
+@click.option(
+    "--force-recreate",
+    is_flag=True,
+    help="Force recreation of the collection",
+)
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=None,
+    help="Size of document chunks. Defaults based on model: ModernBERT-msmarco=512, ModernBERT-base=1000",
+)
+@click.option(
+    "--chunk-overlap",
+    type=int,
+    default=None,
+    help="Overlap between chunks. Defaults based on model: ModernBERT-msmarco=50, ModernBERT-base=200",
+)
+def index(
+    paths: list[Path],
+    pattern: str,
+    persist_dir: Path,
+    embedding_function: str,
+    device: str,
+    force_recreate: bool,
+    chunk_size: int | None,
+    chunk_overlap: int | None,
+):
     """Index documents in one or more directories."""
     if not paths:
         console.print("❌ No paths provided", style="red")
         return
 
     try:
-        indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
+        if embedding_function and not force_recreate:
+            console.print(
+                "[yellow]Warning:[/yellow] Changing embedding model may require recreating the collection. "
+                "Use --force-recreate if you encounter dimension mismatch errors.",
+                style="yellow",
+            )
+
+        indexer = Indexer(
+            persist_directory=persist_dir,
+            enable_persist=True,
+            embedding_function=embedding_function,
+            device=device,
+            force_recreate=force_recreate,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
 
         # Get existing files and their metadata from the index, using absolute paths
         existing_docs = indexer.get_all_documents()
@@ -165,7 +329,18 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
     help="Directory to persist the index",
 )
 @click.option("--max-tokens", default=4000, help="Maximum tokens in context window")
-@click.option("--show-context", is_flag=True, help="Show the full context content")
+@click.option(
+    "--format",
+    type=click.Choice(["summary", "full"]),
+    default="summary",
+    help="Output format: summary (preview only) or full (complete content)",
+)
+@click.option(
+    "--expand",
+    type=click.Choice(["none", "adjacent", "file"]),
+    default="none",
+    help="Context expansion: none (matched chunks), adjacent (with neighboring chunks), file (entire file)",
+)
 @click.option("--raw", is_flag=True, help="Skip syntax highlighting")
 @click.option("--explain", is_flag=True, help="Show scoring explanations")
 @click.option(
@@ -173,16 +348,29 @@ def index(paths: list[Path], pattern: str, persist_dir: Path):
     type=click.STRING,
     help="Custom scoring weights as JSON string, e.g. '{\"recency_boost\": 0.3}'",
 )
+@click.option(
+    "--embedding-function",
+    type=click.Choice(["modernbert", "default"]),
+    help="Embedding function to use (modernbert or default)",
+)
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    help="Device to run embeddings on (cuda or cpu)",
+)
 def search(
     query: str,
     paths: list[Path],
     n_results: int,
     persist_dir: Path,
     max_tokens: int,
-    show_context: bool,
+    format: str,
+    expand: str,
     raw: bool,
     explain: bool,
     weights: str | None,
+    embedding_function: str | None,
+    device: str | None,
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
@@ -205,10 +393,16 @@ def search(
         stdout = sys.stdout
         sys.stdout = open(os.devnull, "w")
         try:
+            # Initialize indexer with explicit arguments
+            # Always use ModernBERT by default for better results
             indexer = Indexer(
                 persist_directory=persist_dir,
                 enable_persist=True,
                 scoring_weights=scoring_weights,
+                embedding_function="modernbert"
+                if embedding_function is None
+                else embedding_function,
+                device=device or "cpu",
             )
             assembler = ContextAssembler(max_tokens=max_tokens)
             if explain:
@@ -223,39 +417,91 @@ def search(
             sys.stdout.close()
             sys.stdout = stdout
 
+    if not documents:
+        console.print("No results found", style="yellow")
+        return
+
+    # Debug info in verbose mode
+    logger.debug(f"Found {len(documents)} documents")
+    for doc in documents:
+        logger.debug(f"Document: {doc.doc_id}, source: {doc.metadata.get('source')}")
+
     # Assemble context window
     context = assembler.assemble_context(documents, user_query=query)
 
-    # if show_context, just print file contents of all matches
-    if show_context:
-        for doc in context.documents:
-            # Display file with syntax highlighting
-            lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
-            output = doc.format_xml()
-            console.print(
-                output
-                if raw
-                else Syntax(
-                    output,
-                    lexer,
-                    theme="monokai",
-                    word_wrap=True,
-                )
+    def get_expanded_content(doc: Document, expand: str, indexer: Indexer) -> str:
+        """Get content based on expansion mode.
+
+        When expand='file' is used, the content is read directly from the filesystem
+        to ensure freshness. The chunks are verified against the current file content
+        to ensure they match, preventing display of outdated content.
+
+        When expand='adjacent', neighboring chunks are retrieved from the index
+        and merged.
+        """
+        logger.debug(f"Expanding content with mode: {expand}")
+        logger.debug(f"Document ID: {doc.doc_id}")
+        source = doc.metadata.get("source")
+        logger.debug(f"Source: {source}")
+
+        if expand == "file":
+            if not source or not Path(source).is_file():
+                logger.warning(f"Source file not found: {source}")
+                return doc.content
+
+            try:
+                # Read fresh content directly from filesystem
+                content = Path(source).read_text()
+
+                # Verify that chunk content exists in current file
+                if doc.content not in content:
+                    logger.warning(f"Chunk content not found in current file: {source}")
+                    return doc.content
+
+                return content
+            except Exception as e:
+                logger.error(f"Error reading file {source}: {e}")
+                return doc.content
+
+        chunks = [doc]
+        if expand == "adjacent":
+            chunks = ChunkMerger.get_adjacent_chunks(doc, indexer)
+            logger.debug(f"Found {len(chunks)} adjacent chunks")
+
+        return ChunkMerger.merge_chunks(chunks)
+
+    # Initialize output formatter
+    formatter = SearchOutputFormatter(console, raw)
+
+    # Handle full format with expanded context
+    if format == "full":
+        for i, doc in enumerate(documents):
+            # Show relevance info first
+            if distances:
+                formatter.print_relevance(1 - distances[i])
+
+            # Get and format content
+            content = get_expanded_content(doc, expand, indexer)
+            formatted = (
+                formatter.format_file(doc, content)
+                if expand == "file"
+                else formatter.format_chunks(doc, content)
             )
+
+            # Display content
+            formatter.print_content(formatted, doc)
             console.print()
         return
 
-    # Show a summary of the most relevant documents
-    console.print("\n[bold]Most Relevant Documents:[/bold]")
+    # Show summary view
+    formatter.print_summary_header()
+
     for i, doc in enumerate(documents):
         source = doc.metadata.get("source", "unknown")
-        distance = distances[i]
-
-        # Show document header
-        console.print(f"\n[cyan]{i+1}. {source}[/cyan]")
+        formatter.print_document_header(i, source)
 
         # Show scoring explanation if requested
-        if explain and explanations:  # Make sure explanations is not None
+        if explain and explanations:
             explanation = explanations[i]
             console.print("\n[bold]Scoring Breakdown:[/bold]")
 
@@ -283,30 +529,13 @@ def search(
             console.print(f"\n  {'Total':15} [bold blue]{total:>7.3f}[/bold blue]")
         else:
             # Just show the base relevance score
-            relevance = 1 - distance
-            console.print(f"[yellow](relevance: {relevance:.2f})[/yellow]")
+            formatter.print_relevance(1 - distances[i])
 
-        # Use file extension as lexer (strip the dot)
-        lexer = doc.metadata.get("extension", "").lstrip(".") or "text"
+        # Display preview
+        formatter.print_preview(doc)
 
-        # Extract preview content (first ~200 chars)
-        preview = doc.content[:200] + ("..." if len(doc.content) > 200 else "")
-
-        # Display preview with syntax highlighting
-        console.print("\n[bold]Preview:[/bold]")
-        syntax = Syntax(
-            preview,
-            lexer,
-            theme="monokai",
-            word_wrap=True,
-        )
-        console.print(syntax)
-
-    # Show assembled context
-    console.print("\n[bold]Full Context:[/bold]")
-    console.print(f"Total tokens: {context.total_tokens}")
-    console.print(f"Documents included: {len(context.documents)}")
-    console.print(f"Truncated: {context.truncated}")
+    # Show assembled context info
+    formatter.print_context_info(context)
 
 
 @cli.command()
@@ -329,10 +558,51 @@ def search(
     default=[],
     help="Glob patterns to ignore",
 )
-def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: list[str]):
+@click.option(
+    "--embedding-function",
+    type=click.Choice(["modernbert", "default"]),
+    help="Embedding function to use (modernbert or default)",
+)
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    help="Device to run embeddings on (cuda or cpu)",
+)
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=None,
+    help="Size of document chunks. Defaults based on model: ModernBERT-msmarco=512, ModernBERT-base=1000",
+)
+@click.option(
+    "--chunk-overlap",
+    type=int,
+    default=None,
+    help="Overlap between chunks. Defaults based on model: ModernBERT-msmarco=50, ModernBERT-base=200",
+)
+def watch(
+    directory: Path,
+    pattern: str,
+    persist_dir: Path,
+    ignore_patterns: list[str],
+    embedding_function: str | None,
+    device: str | None,
+    chunk_size: int | None,
+    chunk_overlap: int | None,
+):
     """Watch directory for changes and update index automatically."""
     try:
-        indexer = Indexer(persist_directory=persist_dir, enable_persist=True)
+        # Initialize indexer with explicit arguments
+        indexer = Indexer(
+            persist_directory=persist_dir,
+            enable_persist=True,
+            embedding_function="modernbert"
+            if embedding_function is None
+            else embedding_function,
+            device=device or "cpu",
+            chunk_size=chunk_size,  # Now optional in Indexer
+            chunk_overlap=chunk_overlap,  # Now optional in Indexer
+        )
 
         # Initial indexing
         console.print(f"Performing initial indexing of {directory}")
@@ -361,6 +631,40 @@ def watch(directory: Path, pattern: str, persist_dir: Path, ignore_patterns: lis
     except Exception as e:
         console.print(f"❌ Error watching directory: {e}", style="red")
         console.print_exception()
+
+
+@cli.command()
+@click.option(
+    "--persist-dir",
+    type=click.Path(path_type=Path),
+    default=default_persist_dir,
+    help="Directory to persist the index",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def clean(persist_dir: Path, force: bool):
+    """Clear the index by removing the persist directory."""
+    try:
+        if not persist_dir.exists():
+            console.print("✅ Index directory does not exist", style="green")
+            return
+
+        if not force:
+            if not click.confirm(
+                f"Are you sure you want to delete the index at {persist_dir}?"
+            ):
+                console.print("Operation cancelled", style="yellow")
+                return
+
+        shutil.rmtree(persist_dir)
+        console.print("✅ Successfully cleared the index", style="green")
+    except Exception as e:
+        console.print(f"❌ Error clearing index: {e}", style="red")
+        if logging.getLogger().level <= logging.DEBUG:
+            console.print_exception()
 
 
 @cli.command()
@@ -411,6 +715,16 @@ def status():
         console.print(
             f"Chunk Overlap: [blue]{status['config']['chunk_overlap']:,}[/blue] tokens"
         )
+        if "embedding_model" in status["config"]:
+            model_name = status["config"]["embedding_model"]
+            if model_name == "ModernBERT":
+                # Get more specific model info from the indexer
+                if isinstance(indexer.embedding_function, ModernBERTEmbedding):
+                    if indexer.embedding_function.is_msmarco:
+                        model_name = "ModernBERT-msmarco (optimized for retrieval)"
+                    else:
+                        model_name = "ModernBERT-base (general purpose)"
+            console.print(f"Embedding Model: [blue]{model_name}[/blue]")
 
     except Exception as e:
         console.print(f"❌ Error getting index status: {e}", style="red")

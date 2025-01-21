@@ -168,6 +168,21 @@ Example benchmark output:
 └────────────────┴────────────┴───────────┴───────────┴──────────────────┘
 ```
 
+### Embeddings
+
+The indexer supports different embedding models for semantic search:
+
+```bash
+# Use ModernBERT embeddings (recommended)
+gptme-rag index *.md --embedding-function modernbert
+```
+
+Features:
+- 🚀 ModernBERT embeddings (8192 token context)
+- 📊 Better performance on code and technical content
+- ~~⚡ Flash Attention 2 support for faster processing~~
+- 🔄 ~~Automatic fallback to CPU if CUDA unavailable~~
+
 ### Document Chunking
 
 The indexer supports automatic document chunking for efficient processing of large files:
