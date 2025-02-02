@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from gptme_rag.indexing.document import Document
 
@@ -72,24 +74,100 @@ def test_indexer_add_documents(indexer, test_docs):
 
 
 def test_indexer_directory(indexer, tmp_path):
-    # Create test files
-    (tmp_path / "test1.txt").write_text("Content about Python")
-    (tmp_path / "test2.txt").write_text("Content about JavaScript")
-    (tmp_path / "subdir").mkdir()
-    (tmp_path / "subdir" / "test3.txt").write_text("Content about TypeScript")
+    # Create test files in different directories with different extensions
+    docs_dir = tmp_path / "docs"
+    src_dir = tmp_path / "src"
+    docs_dir.mkdir()
+    src_dir.mkdir()
 
+    # Create markdown files in docs
+    (docs_dir / "guide.md").write_text("Python programming guide")
+    (docs_dir / "tutorial.md").write_text("JavaScript tutorial")
+
+    # Create Python files in src
+    (src_dir / "main.py").write_text("def main(): print('Hello')")
+    (src_dir / "utils.py").write_text("def util(): return True")
+
+    # Create a text file in root
+    (tmp_path / "notes.txt").write_text("Random notes")
+
+    # Index everything
     indexer.index_directory(tmp_path)
 
-    # Search for programming languages
-    python_results, python_distances, _ = indexer.search("Python")
-    js_results, js_distances, _ = indexer.search("JavaScript")
-    ts_results, ts_distances, _ = indexer.search("TypeScript")
+    # Test extension filter (*.md)
+    md_results, _, _ = indexer.search(
+        "programming",
+        path_filters=("*.md",),
+    )
+    assert len(md_results) > 0
+    assert all(doc.metadata["source"].endswith(".md") for doc in md_results)
 
-    assert len(python_results) > 0
-    assert len(js_results) > 0
-    assert len(ts_results) > 0
+    # Test directory pattern (src/*.py)
+    py_results, _, _ = indexer.search(
+        "def",
+        path_filters=(str(src_dir / "*.py"),),
+    )
+    assert len(py_results) > 0
+    assert all(
+        Path(doc.metadata["source"]).parent.name == "src"
+        and doc.metadata["source"].endswith(".py")
+        for doc in py_results
+    )
 
-    # Verify distances are returned
-    assert len(python_distances) > 0
-    assert len(js_distances) > 0
-    assert len(ts_distances) > 0
+    # Test multiple patterns
+    multi_results, _, _ = indexer.search(
+        "programming",
+        path_filters=("*.md", "*.py"),
+    )
+    assert len(multi_results) > 0
+    assert all(doc.metadata["source"].endswith((".md", ".py")) for doc in multi_results)
+
+    # Test with path and filter combined
+    docs_md_results, _, _ = indexer.search(
+        "tutorial",
+        paths=[docs_dir],
+        path_filters=("*.md",),
+    )
+    assert len(docs_md_results) > 0
+    assert all(
+        Path(doc.metadata["source"]).parent.name == "docs"
+        and doc.metadata["source"].endswith(".md")
+        for doc in docs_md_results
+    )
+
+
+def test_path_matching(indexer):
+    # Test the _matches_paths method directly
+    doc = Document(
+        content="test",
+        metadata={"source": "/home/user/project/docs/guide.md"},
+        doc_id="test",
+    )
+
+    # Test simple extension filter
+    assert indexer._matches_paths(doc, path_filters=("*.md",))
+    assert not indexer._matches_paths(doc, path_filters=("*.py",))
+
+    # Test directory pattern
+    assert indexer._matches_paths(doc, path_filters=("docs/*.md",))
+    assert not indexer._matches_paths(doc, path_filters=("src/*.md",))
+
+    # Test multiple patterns
+    assert indexer._matches_paths(doc, path_filters=("*.py", "*.md"))
+    assert indexer._matches_paths(doc, path_filters=("src/*.py", "docs/*.md"))
+
+    # Test with exact paths
+    assert indexer._matches_paths(doc, paths=[Path("/home/user/project/docs")])
+    assert not indexer._matches_paths(doc, paths=[Path("/home/user/project/src")])
+
+    # Test combining paths and filters
+    assert indexer._matches_paths(
+        doc,
+        paths=[Path("/home/user/project/docs")],
+        path_filters=("*.md",),
+    )
+    assert not indexer._matches_paths(
+        doc,
+        paths=[Path("/home/user/project/docs")],
+        path_filters=("*.py",),
+    )

@@ -483,16 +483,85 @@ class Indexer:
 
         return total_score, scores
 
-    def _matches_paths(self, doc: Document, paths: list[Path]) -> bool:
-        """Check if document matches any of the given paths."""
+    def _matches_paths(
+        self,
+        doc: Document,
+        paths: list[Path] | None = None,
+        path_filters: tuple[str, ...] | None = None,
+    ) -> bool:
+        """Check if document matches any of the given paths or filters.
+
+        Args:
+            doc: Document to check
+            paths: List of paths to match against (exact path matching)
+            path_filters: List of glob patterns to match against
+
+        Returns:
+            bool: True if document matches any path or filter
+        """
         source = doc.metadata.get("source", "")
         if not source:
             return False
+
         source_path = Path(source)
-        return any(
-            path.resolve() in source_path.parents or path.resolve() == source_path
-            for path in paths
-        )
+
+        path_match = True
+        filter_match = True
+
+        # Check exact path matches if paths are specified
+        if paths:
+            path_match = any(
+                path.resolve() in source_path.parents or path.resolve() == source_path
+                for path in paths
+            )
+            if not path_match:
+                logger.debug(f"Path match failed: {source_path} not in {paths}")
+                return False
+
+        # Check pattern matches if filters are specified
+        if path_filters:
+            # Get both the full path and relative components for matching
+            source_str = str(source_path)
+            source_name = source_path.name
+            source_parts = source_path.parts
+
+            filter_match = False  # Set to True if any pattern matches
+            for pattern in path_filters:
+                logger.debug(f"Checking pattern: {pattern} against {source_str}")
+
+                # Handle different pattern types
+                if pattern.startswith("*."):
+                    # Simple extension filter
+                    if source_name.endswith(pattern[1:]):
+                        logger.debug(f"Matched extension pattern: {pattern}")
+                        filter_match = True
+                        break
+                else:
+                    # Convert pattern to parts for matching
+                    pattern_path = Path(pattern)
+                    pattern_parts = pattern_path.parts
+
+                    # Try different matching strategies
+                    if (
+                        fnmatch_path(source_str, pattern)
+                        or fnmatch_path(source_str, f"**/{pattern}")
+                        or (
+                            len(pattern_parts) <= len(source_parts)
+                            and fnmatch_path(
+                                str(Path(*source_parts[-len(pattern_parts) :])), pattern
+                            )
+                        )
+                    ):
+                        logger.debug(f"Matched path pattern: {pattern}")
+                        filter_match = True
+                        break
+
+            if not filter_match:
+                logger.debug(f"No patterns matched: {source_str}")
+                return False
+
+        # Both conditions must be met (if specified)
+        return path_match and filter_match
 
     def search(
         self,
@@ -503,16 +572,80 @@ class Indexer:
         group_chunks: bool = True,
         max_attempts: int = 3,
         explain: bool = False,
+        path_filters: tuple[str, ...] | None = None,
     ) -> tuple[list[Document], list[float], list[dict[str, Any]] | None]:
-        """Search for documents similar to the query."""
+        """Search for documents similar to the query.
+
+        Args:
+            query: The search query text
+            paths: List of paths to search within (exact path matching)
+            n_results: Maximum number of results to return
+            where: Additional where clauses for ChromaDB query
+            group_chunks: Whether to group chunks from the same document
+            max_attempts: Maximum number of search attempts
+            explain: Whether to return scoring explanations
+            path_filters: Glob patterns to filter documents by path. Supports:
+                - Simple extension filters (*.md, *.py)
+                - Path patterns (src/*.py, docs/**/*.md)
+                - Multiple patterns can be combined
+
+        Returns:
+            Tuple of (documents, distances, explanations)
+            - documents: List of matching Document objects
+            - distances: List of embedding distances
+            - explanations: List of scoring explanations (if explain=True)
+
+        Examples:
+            # Search in markdown files
+            search("query", path_filters=("*.md",))
+
+            # Search in Python files in src directory
+            search("query", path_filters=("src/**/*.py",))
+
+            # Search in multiple file types
+            search("query", path_filters=("*.md", "*.py"))
+
+            # Combine paths and filters
+            search("query", paths=[Path("docs")], path_filters=("*.md",))
+        """
         # Get more results than needed to allow for filtering
         query_n_results = n_results * 3 if group_chunks else n_results
+
+        # Prepare where clause
+        search_where = where.copy() if where else {}
+
+        # Pre-filter documents based on all patterns
+        if path_filters:
+            logger.debug(f"Filtering with patterns: {path_filters}")
+            all_docs = self.collection.get()
+            matching_sources = set()
+
+            for meta in all_docs["metadatas"]:
+                if not meta or "source" not in meta:
+                    continue
+
+                source_path = Path(meta["source"])
+                # Create a dummy document for path matching
+                doc = Document(
+                    content="", metadata=meta, doc_id="temp", source_path=source_path
+                )
+
+                # Use _matches_paths to check all patterns
+                if self._matches_paths(doc, paths=None, path_filters=path_filters):
+                    matching_sources.add(str(source_path))
+
+            if matching_sources:
+                logger.debug(f"Found {len(matching_sources)} matching files")
+                search_where["source"] = {"$in": list(matching_sources)}
+            else:
+                logger.debug("No files matched the filter patterns")
+                return [], [], [] if explain else None
 
         # Query the collection
         results = self.collection.query(
             query_texts=[query],
             n_results=query_n_results,
-            where=where,
+            where=search_where,
         )
 
         if not results["ids"][0]:
@@ -530,7 +663,7 @@ class Indexer:
                         metadata=results["metadatas"][0][i],
                         doc_id=doc_id,
                     )
-                    if not paths or self._matches_paths(doc, paths):
+                    if self._matches_paths(doc, paths, path_filters):
                         docs_by_source[source_id] = (doc, results["distances"][0][i])
 
             # Take top n results
@@ -541,7 +674,7 @@ class Indexer:
         else:
             # Process individual chunks
             documents, distances, _ = self._process_individual_chunks(
-                results, paths, n_results, explain
+                results, paths, n_results, explain, path_filters
             )
 
         # Add explanations if requested
@@ -564,6 +697,7 @@ class Indexer:
         paths: list[Path] | None,
         n_results: int,
         explain: bool,
+        path_filters: tuple[str, ...] | None = None,
     ) -> tuple[list[Document], list[float], list[dict]]:
         """Process search results as individual chunks."""
         documents: list[Document] = []
@@ -583,7 +717,7 @@ class Indexer:
                 doc_id=doc_id,
             )
 
-            if paths and not self._matches_paths(doc, paths):
+            if not self._matches_paths(doc, paths, path_filters):
                 continue
 
             documents.append(doc)
