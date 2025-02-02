@@ -358,6 +358,12 @@ def index(
     type=click.Choice(["cuda", "cpu"]),
     help="Device to run embeddings on (cuda or cpu)",
 )
+@click.option(
+    "--filter",
+    "-f",
+    multiple=True,
+    help="Filter results by path pattern (glob). Can be specified multiple times.",
+)
 def search(
     query: str,
     paths: list[Path],
@@ -371,6 +377,7 @@ def search(
     weights: str | None,
     embedding_function: str | None,
     device: str | None,
+    filter: tuple[str, ...],
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
@@ -405,13 +412,27 @@ def search(
                 device=device or "cpu",
             )
             assembler = ContextAssembler(max_tokens=max_tokens)
+
+            # Combine paths and filters for search
+            search_paths = list(paths)
+            if filter:
+                # If no paths were specified but filters are present,
+                # search from root and apply filters
+                if not paths:
+                    search_paths = [Path(".")]
+                logger.debug(f"Using path filters: {filter}")
+
             if explain:
                 documents, distances, explanations = indexer.search(
-                    query, n_results=n_results, paths=paths, explain=True
+                    query,
+                    n_results=n_results,
+                    paths=search_paths,
+                    path_filters=filter,
+                    explain=True,
                 )
             else:
                 documents, distances, _ = indexer.search(
-                    query, n_results=n_results, paths=paths
+                    query, n_results=n_results, paths=search_paths, path_filters=filter
                 )
         finally:
             sys.stdout.close()
