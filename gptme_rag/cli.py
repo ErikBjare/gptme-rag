@@ -364,6 +364,11 @@ def index(
     multiple=True,
     help="Filter results by path pattern (glob). Can be specified multiple times.",
 )
+@click.option(
+    "--print-relevance",
+    is_flag=True,
+    help="Print relevance scores",
+)
 def search(
     query: str,
     paths: list[Path],
@@ -378,6 +383,7 @@ def search(
     embedding_function: str | None,
     device: str | None,
     filter: tuple[str, ...],
+    print_relevance: bool,
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
@@ -498,7 +504,7 @@ def search(
     if format == "full":
         for i, doc in enumerate(documents):
             # Show relevance info first
-            if distances:
+            if distances and print_relevance:
                 formatter.print_relevance(1 - distances[i])
 
             # Get and format content
@@ -550,7 +556,8 @@ def search(
             console.print(f"\n  {'Total':15} [bold blue]{total:>7.3f}[/bold blue]")
         else:
             # Just show the base relevance score
-            formatter.print_relevance(1 - distances[i])
+            if distances and print_relevance:
+                formatter.print_relevance(1 - distances[i])
 
         # Display preview
         formatter.print_preview(doc)
