@@ -109,7 +109,7 @@ class SearchOutputFormatter:
             else Syntax(content, lexer, theme="monokai", word_wrap=True)
         )
 
-    def print_relevance(self, relevance: float):
+    def print_score(self, relevance: float):
         """Print relevance score."""
         self.console.print(f"\n[yellow]Relevance: {relevance:.2f}[/yellow]")
 
@@ -342,6 +342,11 @@ def index(
     help="Context expansion: none (matched chunks), adjacent (with neighboring chunks), file (entire file)",
 )
 @click.option("--raw", is_flag=True, help="Skip syntax highlighting")
+@click.option(
+    "--score",
+    is_flag=True,
+    help="Output relevance scores",
+)
 @click.option("--explain", is_flag=True, help="Show scoring explanations")
 @click.option(
     "--weights",
@@ -364,17 +369,13 @@ def index(
     multiple=True,
     help="Filter results by path pattern (glob). Can be specified multiple times.",
 )
-@click.option(
-    "--print-relevance",
-    is_flag=True,
-    help="Print relevance scores",
-)
 def search(
     query: str,
     paths: list[Path],
     n_results: int,
     persist_dir: Path,
     max_tokens: int,
+    score: bool,
     format: str,
     expand: str,
     raw: bool,
@@ -383,7 +384,6 @@ def search(
     embedding_function: str | None,
     device: str | None,
     filter: tuple[str, ...],
-    print_relevance: bool,
 ):
     """Search the index and assemble context."""
     paths = [path.resolve() for path in paths]
@@ -412,9 +412,9 @@ def search(
                 persist_directory=persist_dir,
                 enable_persist=True,
                 scoring_weights=scoring_weights,
-                embedding_function="modernbert"
-                if embedding_function is None
-                else embedding_function,
+                embedding_function=(
+                    "modernbert" if embedding_function is None else embedding_function
+                ),
                 device=device or "cpu",
             )
             assembler = ContextAssembler(max_tokens=max_tokens)
@@ -504,8 +504,8 @@ def search(
     if format == "full":
         for i, doc in enumerate(documents):
             # Show relevance info first
-            if distances and print_relevance:
-                formatter.print_relevance(1 - distances[i])
+            if distances and score:
+                formatter.print_score(1 - distances[i])
 
             # Get and format content
             content = get_expanded_content(doc, expand, indexer)
@@ -556,8 +556,8 @@ def search(
             console.print(f"\n  {'Total':15} [bold blue]{total:>7.3f}[/bold blue]")
         else:
             # Just show the base relevance score
-            if distances and print_relevance:
-                formatter.print_relevance(1 - distances[i])
+            if distances and score:
+                formatter.print_score(1 - distances[i])
 
         # Display preview
         formatter.print_preview(doc)
@@ -624,9 +624,9 @@ def watch(
         indexer = Indexer(
             persist_directory=persist_dir,
             enable_persist=True,
-            embedding_function="modernbert"
-            if embedding_function is None
-            else embedding_function,
+            embedding_function=(
+                "modernbert" if embedding_function is None else embedding_function
+            ),
             device=device or "cpu",
             chunk_size=chunk_size,  # Now optional in Indexer
             chunk_overlap=chunk_overlap,  # Now optional in Indexer
